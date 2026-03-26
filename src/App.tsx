@@ -20,6 +20,7 @@ import {
   Plane,
   Play,
   Plus,
+  ScanSearch,
   Radar,
   Rocket,
   RotateCcw,
@@ -29,8 +30,13 @@ import {
   Trash2,
   Video,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MissionViewport3D } from './components/MissionViewport3D'
+import {
+  FLIGHT_PATTERN_OPTIONS,
+  getFlightPatternOption,
+  type FlightPatternId,
+} from './lib/flightPatterns'
 import {
   canAppendPointToOpenPath,
   generateCoverageSegments,
@@ -66,6 +72,11 @@ interface InteractionNotice {
   message: string
 }
 
+interface OverlayAnchor {
+  x: number
+  y: number
+}
+
 function App() {
   const operationMode = useMissionStore((state) => state.operationMode)
   const editorTab = useMissionStore((state) => state.editorTab)
@@ -98,19 +109,45 @@ function App() {
   const removeWaypointAction = useMissionStore((state) => state.removeWaypointAction)
   const moveWaypointAction = useMissionStore((state) => state.moveWaypointAction)
   const [interactionNotice, setInteractionNotice] = useState<InteractionNotice | null>(null)
+  const [isReadyToClose, setIsReadyToClose] = useState(false)
   const [pendingActionType, setPendingActionType] =
     useState<MissionWaypointActionType>('hover')
+  const [selectedPattern, setSelectedPattern] =
+    useState<FlightPatternId>('coverage')
+  const [hoveredPattern, setHoveredPattern] = useState<FlightPatternId | null>(null)
+  const [patternPickerVisible, setPatternPickerVisible] = useState(false)
+  const [patternPickerAnchor, setPatternPickerAnchor] = useState<OverlayAnchor | null>(
+    null,
+  )
+  const [viewportStageSize, setViewportStageSize] = useState({
+    width: 0,
+    height: 0,
+  })
+  const patternPickerRef = useRef<HTMLDivElement | null>(null)
+  const viewportStageRef = useRef<HTMLDivElement | null>(null)
+  const patternPickerDelayRef = useRef<number | null>(null)
+  const selectedPatternOption = useMemo(
+    () => getFlightPatternOption(selectedPattern),
+    [selectedPattern],
+  )
+  const hoveredPatternOption = useMemo(
+    () => (hoveredPattern ? getFlightPatternOption(hoveredPattern) : null),
+    [hoveredPattern],
+  )
   const isPolygonValid = useMemo(
     () => points.length >= 3 && isSimplePolygon(points),
     [points],
   )
+  const activePreviewPattern = hoveredPattern ?? selectedPattern
 
   const coverageSegments = useMemo(
     () =>
-      (stage === 'editing' || stage === 'generated') && isPolygonValid
+      activePreviewPattern === 'coverage' &&
+      (stage === 'editing' || stage === 'generated') &&
+      isPolygonValid
         ? generateCoverageSegments(points, lineSpacing, orientation)
         : [],
-    [isPolygonValid, lineSpacing, orientation, points, stage],
+    [activePreviewPattern, isPolygonValid, lineSpacing, orientation, points, stage],
   )
   const generatedWaypoints = useMemo(
     () => generateCoverageWaypoints(coverageSegments, scanAltitude),
@@ -148,6 +185,95 @@ function App() {
     (stage === 'setup' || stage === 'drawing' || stage === 'editing')
       ? interactionNotice
       : null
+
+  function dismissPatternPicker() {
+    if (patternPickerDelayRef.current !== null) {
+      window.clearTimeout(patternPickerDelayRef.current)
+      patternPickerDelayRef.current = null
+    }
+
+    setPatternPickerVisible(false)
+    setHoveredPattern(null)
+  }
+
+  function schedulePatternPickerOpen() {
+    if (patternPickerDelayRef.current !== null) {
+      window.clearTimeout(patternPickerDelayRef.current)
+    }
+
+    patternPickerDelayRef.current = window.setTimeout(() => {
+      setPatternPickerVisible(true)
+      patternPickerDelayRef.current = null
+    }, 200)
+  }
+
+  useEffect(() => {
+    const viewportStage = viewportStageRef.current
+
+    if (!viewportStage) {
+      return undefined
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+
+      if (!entry) {
+        return
+      }
+
+      setViewportStageSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      })
+    })
+
+    observer.observe(viewportStage)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!patternPickerVisible) {
+      return undefined
+    }
+
+    const dismissTimer = window.setTimeout(() => {
+      dismissPatternPicker()
+    }, 8000)
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        dismissPatternPicker()
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (patternPickerRef.current?.contains(event.target as Node)) {
+        return
+      }
+
+      dismissPatternPicker()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('pointerdown', handlePointerDown)
+
+    return () => {
+      window.clearTimeout(dismissTimer)
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [patternPickerVisible])
+
+  useEffect(() => {
+    return () => {
+      if (patternPickerDelayRef.current !== null) {
+        window.clearTimeout(patternPickerDelayRef.current)
+      }
+    }
+  }, [])
 
   function clearInteractionNotice() {
     setInteractionNotice(null)
@@ -192,9 +318,18 @@ function App() {
 
     clearInteractionNotice()
     closePolygon()
+    schedulePatternPickerOpen()
   }
 
   function handleGeneratePath() {
+    if (!selectedPatternOption.implemented) {
+      setInteractionNotice({
+        tone: 'warning',
+        message: `${selectedPatternOption.shortLabel} preview is available, but full generation is not built yet.`,
+      })
+      return
+    }
+
     if (!isPolygonValid || generatedWaypoints.length === 0) {
       setInteractionNotice({
         tone: 'warning',
@@ -207,17 +342,56 @@ function App() {
     generateMissionPath(generatedWaypoints)
   }
 
+  function handleResetMission() {
+    dismissPatternPicker()
+    clearInteractionNotice()
+    setSelectedPattern('coverage')
+    setPatternPickerAnchor(null)
+    resetMission()
+  }
+
+  function handleRedrawMission() {
+    dismissPatternPicker()
+    clearInteractionNotice()
+    redrawMission()
+  }
+
+  function handleSelectPattern(patternId: FlightPatternId) {
+    const nextPattern = getFlightPatternOption(patternId)
+    setSelectedPattern(patternId)
+    setHoveredPattern(null)
+    setPatternPickerVisible(false)
+    setInteractionNotice(
+      nextPattern.implemented
+        ? null
+        : {
+            tone: 'warning',
+            message: `${nextPattern.shortLabel} is wired for popup selection and preview, but generator logic is still pending.`,
+          },
+    )
+  }
+
   const viewportHint = activeNotice?.message
     ? activeNotice.message
     : stage === 'setup'
       ? 'Tap highlighted altitude plane to place first point'
       : stage === 'drawing'
-        ? 'Click first point to close polygon'
-        : stage === 'editing'
-          ? 'Click & drag points to adjust position'
+        ? stage === 'drawing' && isReadyToClose
+          ? 'Click to close polygon'
+          : 'Click first point to close polygon'
+      : stage === 'editing'
+          ? patternPickerVisible
+            ? hoveredPatternOption
+              ? `Previewing ${hoveredPatternOption.label}`
+              : 'Choose a flight pattern for this region'
+            : 'Click & drag points to adjust position'
           : stage === 'generated'
             ? 'Generated path ready · select waypoint to inspect'
             : null
+  const patternPickerPosition = getPatternPickerPosition(
+    patternPickerAnchor,
+    viewportStageSize,
+  )
 
   return (
     <main className="app-shell">
@@ -260,9 +434,10 @@ function App() {
       <section className="workspace">
         <section className="viewport-panel" aria-label="Mission viewport">
           <div
+            ref={viewportStageRef}
             className={`viewport-stage ${
               stage === 'setup' || stage === 'drawing' ? 'is-drawing' : ''
-            }`}
+            } ${stage === 'drawing' && isReadyToClose ? 'is-ready-to-close' : ''}`}
           >
             {viewportHint && (
               <div
@@ -282,12 +457,78 @@ function App() {
               coverageSegments={coverageSegments}
               waypoints={waypoints}
               selectedWaypointId={selectedWaypointId}
+              selectedPattern={selectedPattern}
+              hoveredPattern={hoveredPattern}
+              patternPickerVisible={patternPickerVisible}
               onStartDrawing={startDrawing}
               onAddPoint={handleAddPoint}
               onUpdatePoint={handleUpdatePoint}
               onClosePolygon={handleClosePolygon}
               onSelectWaypoint={selectWaypoint}
+              onReadyToCloseChange={setIsReadyToClose}
+              onPatternPickerAnchorChange={setPatternPickerAnchor}
             />
+
+            {patternPickerVisible && patternPickerPosition && (
+              <div
+                ref={patternPickerRef}
+                className={`pattern-picker ${
+                  patternPickerPosition.placement === 'below' ? 'is-below' : ''
+                }`}
+                style={{
+                  left: `${patternPickerPosition.left}px`,
+                  top: `${patternPickerPosition.top}px`,
+                }}
+              >
+                <div className="pattern-picker-header">
+                  <strong>Choose Flight Pattern</strong>
+                  <span>Pick a route style for the area you just closed.</span>
+                </div>
+
+                <div className="pattern-picker-list">
+                  {FLIGHT_PATTERN_OPTIONS.map((pattern) => (
+                    <button
+                      key={pattern.id}
+                      type="button"
+                      className={`pattern-tile ${
+                        selectedPattern === pattern.id ? 'is-selected' : ''
+                      }`}
+                      onMouseEnter={() => setHoveredPattern(pattern.id)}
+                      onMouseLeave={() => setHoveredPattern((current) =>
+                        current === pattern.id ? null : current,
+                      )}
+                      onClick={() => handleSelectPattern(pattern.id)}
+                    >
+                      <span
+                        className="pattern-tile-glyph"
+                        style={{ color: pattern.color }}
+                      >
+                        {getPatternGlyph(pattern.id)}
+                      </span>
+                      <span className="pattern-tile-copy">
+                        <strong>{pattern.label}</strong>
+                        <span>{pattern.description}</span>
+                      </span>
+                      <span className="pattern-tile-meta">
+                        {!pattern.implemented && (
+                          <span className="pattern-soon-chip">Preview</span>
+                        )}
+                        <ChevronRight size={14} strokeWidth={2.2} />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="pattern-picker-footer"
+                  onClick={dismissPatternPicker}
+                >
+                  Customize later in sidebar
+                  <ChevronRight size={14} strokeWidth={2.2} />
+                </button>
+              </div>
+            )}
 
             <div className="viewport-toolbar" aria-label="Viewport tools">
               {toolbarItems.map(({ id, label, icon: Icon }) => (
@@ -306,7 +547,7 @@ function App() {
 
         <aside className="sidebar" aria-label="Mission controls">
           <div className="action-row">
-            <button type="button" className="button button-secondary" onClick={resetMission}>
+            <button type="button" className="button button-secondary" onClick={handleResetMission}>
               <RotateCcw size={18} strokeWidth={2.2} />
               Reset
             </button>
@@ -359,8 +600,8 @@ function App() {
                   <Route size={18} strokeWidth={2.2} />
                 </div>
                 <div className="plan-copy">
-                  <h2>Coverage Area Scan</h2>
-                  <p>Automated polygon scan path</p>
+                  <h2>{selectedPatternOption.shortLabel}</h2>
+                  <p>{selectedPatternOption.description}</p>
                 </div>
                 <button type="button" className="inline-cta" onClick={enterSetup}>
                   Setup
@@ -373,7 +614,7 @@ function App() {
               <div className="setup-panel">
                 <div className="setup-mode">
                   <span className="setup-dot" />
-                  <span>Coverage Area Scan</span>
+                  <span>{selectedPatternOption.shortLabel}</span>
                 </div>
 
                 <label className="field-label" htmlFor="scan-altitude">
@@ -413,7 +654,7 @@ function App() {
               <div className="drawing-panel">
                 <div className="setup-mode">
                   <span className="setup-dot" />
-                  <span>Drawing Coverage Area</span>
+                  <span>Drawing {selectedPatternOption.shortLabel}</span>
                 </div>
 
                 <div className="stat-strip">
@@ -423,7 +664,10 @@ function App() {
 
                 <div className="hint-card">
                   <span className="hint-icon">✦</span>
-                  {activeNotice?.message ?? 'Click first point to close polygon'}
+                  {activeNotice?.message ??
+                    (isReadyToClose
+                      ? 'Click để đóng vùng'
+                      : 'Click first point to close polygon')}
                 </div>
 
                 <button
@@ -440,7 +684,7 @@ function App() {
               <div className="editing-panel">
                 <div className="setup-mode">
                   <ScanLine size={16} strokeWidth={2.2} />
-                  <span>Coverage Area Scan</span>
+                  <span>{selectedPatternOption.shortLabel}</span>
                 </div>
 
                 <div className="summary-grid">
@@ -474,44 +718,60 @@ function App() {
                   </div>
                 </div>
 
-                <SliderField
-                  id="phase2-altitude"
-                  label="Scan Altitude"
-                  min={20}
-                  max={120}
-                  step={1}
-                  value={scanAltitude}
-                  valueLabel={`${scanAltitude}m`}
-                  onChange={setScanAltitude}
-                />
+                {selectedPattern === 'coverage' ? (
+                  <>
+                    <SliderField
+                      id="phase2-altitude"
+                      label="Scan Altitude"
+                      min={20}
+                      max={120}
+                      step={1}
+                      value={scanAltitude}
+                      valueLabel={`${scanAltitude}m`}
+                      onChange={setScanAltitude}
+                    />
 
-                <SliderField
-                  id="phase2-spacing"
-                  label="Line Spacing"
-                  min={6}
-                  max={30}
-                  step={1}
-                  value={lineSpacing}
-                  valueLabel={`${lineSpacing}m`}
-                  onChange={setLineSpacing}
-                />
+                    <SliderField
+                      id="phase2-spacing"
+                      label="Line Spacing"
+                      min={6}
+                      max={30}
+                      step={1}
+                      value={lineSpacing}
+                      valueLabel={`${lineSpacing}m`}
+                      onChange={setLineSpacing}
+                    />
 
-                <SliderField
-                  id="phase2-orientation"
-                  label="Orientation"
-                  min={-90}
-                  max={90}
-                  step={1}
-                  value={orientation}
-                  valueLabel={`${orientation}°`}
-                  onChange={setOrientation}
-                />
+                    <SliderField
+                      id="phase2-orientation"
+                      label="Orientation"
+                      min={-90}
+                      max={90}
+                      step={1}
+                      value={orientation}
+                      valueLabel={`${orientation}°`}
+                      onChange={setOrientation}
+                    />
+                  </>
+                ) : (
+                  <div className="pattern-preview-card">
+                    <div className="pattern-preview-header">
+                      <ScanSearch size={16} strokeWidth={2.2} />
+                      <span>{selectedPatternOption.label} Preview</span>
+                    </div>
+                    <p>
+                      This pattern can already be chosen from the popup and previewed
+                      in the viewport. Full generator controls will land in the next
+                      mode-expansion pass.
+                    </p>
+                  </div>
+                )}
 
                 <div className="button-row">
                   <button
                     type="button"
                     className="button button-cancel"
-                    onClick={redrawMission}
+                    onClick={handleRedrawMission}
                   >
                     Redraw
                   </button>
@@ -519,7 +779,11 @@ function App() {
                     type="button"
                     className="button button-primary button-primary-small"
                     onClick={handleGeneratePath}
-                    disabled={generatedWaypoints.length === 0 || !isPolygonValid}
+                    disabled={
+                      !selectedPatternOption.implemented ||
+                      generatedWaypoints.length === 0 ||
+                      !isPolygonValid
+                    }
                   >
                     Generate Path
                   </button>
@@ -533,7 +797,7 @@ function App() {
                   <div className="generated-summary-top">
                     <div className="setup-mode">
                       <ScanLine size={16} strokeWidth={2.2} />
-                      <span>Coverage Area Scan</span>
+                      <span>{selectedPatternOption.shortLabel}</span>
                     </div>
                     <button
                       type="button"
@@ -591,7 +855,7 @@ function App() {
                     <Route size={16} strokeWidth={2.2} />
                   </div>
                   <div className="behavior-overview-copy">
-                    <strong>Coverage Area Scan</strong>
+                    <strong>{selectedPatternOption.shortLabel}</strong>
                     <span>
                       {waypoints.length} waypoints · {waypointsWithActions} action nodes ·{' '}
                       {totalWaypointActions} actions
@@ -627,7 +891,7 @@ function App() {
                 )}
               </div>
             ) : (
-              <button type="button" className="button behavior-button">
+            <button type="button" className="button behavior-button">
                 <Plus size={16} strokeWidth={2.2} />
                 Add behavior
               </button>
@@ -1121,6 +1385,57 @@ function summarizeWaypointActionStack(actions: MissionWaypointAction[]): string 
   }
 
   return `${firstAction} +${actions.length - 1} more`
+}
+
+function getPatternGlyph(patternId: FlightPatternId): string {
+  switch (patternId) {
+    case 'coverage':
+      return 'CV'
+    case 'perimeter':
+      return 'PM'
+    case 'orbit':
+      return 'OI'
+    case 'spiral':
+      return 'SP'
+    case 'grid':
+      return 'GD'
+    case 'corridor':
+      return 'CR'
+  }
+}
+
+function getPatternPickerPosition(
+  anchor: OverlayAnchor | null,
+  containerSize: { width: number; height: number },
+): { left: number; top: number; placement: 'above' | 'below' } | null {
+  if (!anchor || containerSize.width === 0 || containerSize.height === 0) {
+    return null
+  }
+
+  const { width, height } = containerSize
+  const popupWidth = 320
+  const popupHeight = 372
+  const margin = 18
+  const left = clampValue(anchor.x, popupWidth / 2 + margin, width - popupWidth / 2 - margin)
+  const preferBelow = anchor.y < 150
+
+  if (preferBelow) {
+    return {
+      left,
+      top: clampValue(anchor.y + 20, margin, height - popupHeight - margin),
+      placement: 'below',
+    }
+  }
+
+  return {
+    left,
+    top: clampValue(anchor.y - 20, popupHeight + margin, height - margin),
+    placement: 'above',
+  }
+}
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
 function renderWaypointActionIcon(type: MissionWaypointActionType) {

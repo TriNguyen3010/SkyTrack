@@ -6,9 +6,13 @@ import {
   PerspectiveCamera,
   Text,
 } from '@react-three/drei'
-import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
+import {
+  getFlightPatternOption,
+  type FlightPatternId,
+} from '../lib/flightPatterns'
 import {
   WORLD_BOUNDS,
   WORLD_DIMENSIONS,
@@ -32,7 +36,30 @@ const ALTITUDE_MARKER_LIFT = 2.6
 const HOVER_OFFSET = 0.28
 const DRONE_LIFT = 6
 const MAX_CLICK_DELTA = 4
+const MIN_CAMERA_DISTANCE = 120
+const MAX_CAMERA_DISTANCE = 520
+const FIT_PADDING = 1.3
+const CLOSE_SNAP_RADIUS_PX = 16
+const DEFAULT_MIN_POLAR_ANGLE = Math.PI / 4.8
+const DEFAULT_MAX_POLAR_ANGLE = Math.PI / 2.04
+const DRAWING_MAX_POLAR_ANGLE = Math.PI / 2.5
+const DRAWING_TARGET_LERP_SPEED = 7.5
+const DRAWING_DISTANCE_DAMP_SPEED = 5.5
+const DRAWING_FIT_PADDING = 1.14
+const GENERATED_REVEAL_DURATION = 0.92
+const GENERATED_RECENTER_DURATION = 0.36
+const GENERATED_SELECTION_BLEND = 0.42
 type ScenePoint = [number, number, number]
+type OrbitControlsHandle = {
+  target: THREE.Vector3
+  update: () => void
+  enabled: boolean
+  enablePan: boolean
+  enableRotate: boolean
+  enableZoom: boolean
+  minPolarAngle: number
+  maxPolarAngle: number
+}
 
 interface MissionViewport3DProps {
   stage: MissionStage
@@ -41,11 +68,16 @@ interface MissionViewport3DProps {
   coverageSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
+  selectedPattern: FlightPatternId
+  hoveredPattern: FlightPatternId | null
+  patternPickerVisible: boolean
   onStartDrawing: () => void
   onAddPoint: (x: number, y: number) => void
   onUpdatePoint: (id: number, x: number, y: number) => void
   onClosePolygon: () => void
   onSelectWaypoint: (id: number | null) => void
+  onReadyToCloseChange?: (ready: boolean) => void
+  onPatternPickerAnchorChange?: (anchor: Vec2 | null) => void
 }
 
 export function MissionViewport3D({
@@ -55,14 +87,22 @@ export function MissionViewport3D({
   coverageSegments,
   waypoints,
   selectedWaypointId,
+  selectedPattern,
+  hoveredPattern,
+  patternPickerVisible,
   onStartDrawing,
   onAddPoint,
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onReadyToCloseChange,
+  onPatternPickerAnchorChange,
 }: MissionViewport3DProps) {
   const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [draggingPointId, setDraggingPointId] = useState<number | null>(null)
+  const [isGeneratedRevealActive, setIsGeneratedRevealActive] = useState(false)
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const orbitControlsRef = useRef<OrbitControlsHandle | null>(null)
 
   const cameraTarget = useMemo(() => {
     if (points.length > 0) {
@@ -80,7 +120,12 @@ export function MissionViewport3D({
     <Canvas className="viewport-canvas" gl={{ antialias: true }}>
       <color attach="background" args={['#d6e0ec']} />
       <fog attach="fog" args={['#d6e0ec', 210, 420]} />
-      <PerspectiveCamera makeDefault position={CAMERA_POSITION} fov={34} />
+      <PerspectiveCamera
+        ref={cameraRef}
+        makeDefault
+        position={CAMERA_POSITION}
+        fov={34}
+      />
 
       <Suspense fallback={null}>
         <MissionWorld
@@ -90,6 +135,10 @@ export function MissionViewport3D({
           coverageSegments={coverageSegments}
           waypoints={waypoints}
           selectedWaypointId={selectedWaypointId}
+          selectedPattern={selectedPattern}
+          hoveredPattern={hoveredPattern}
+          patternPickerVisible={patternPickerVisible}
+          generatedRevealLocked={isGeneratedRevealActive}
           onStartDrawing={onStartDrawing}
           hoverPoint={hoverPoint}
           draggingPointId={draggingPointId}
@@ -97,26 +146,60 @@ export function MissionViewport3D({
           onUpdatePoint={onUpdatePoint}
           onClosePolygon={onClosePolygon}
           onSelectWaypoint={onSelectWaypoint}
+          onReadyToCloseChange={onReadyToCloseChange}
+          onPatternPickerAnchorChange={onPatternPickerAnchorChange}
           onHoverPointChange={setHoverPoint}
           onDraggingPointChange={setDraggingPointId}
         />
       </Suspense>
 
       <OrbitControls
+        ref={(controls) => {
+          orbitControlsRef.current = controls
+        }}
         makeDefault
-        enabled={draggingPointId === null}
+        enabled={
+          draggingPointId === null &&
+          !patternPickerVisible &&
+          !isGeneratedRevealActive
+        }
         enableDamping
-        minDistance={120}
-        maxDistance={340}
-        minPolarAngle={Math.PI / 4.8}
-        maxPolarAngle={Math.PI / 2.04}
-        target={[cameraTarget.x, stage === 'idle' ? 0 : scanAltitude, cameraTarget.y]}
+        minDistance={MIN_CAMERA_DISTANCE}
+        maxDistance={MAX_CAMERA_DISTANCE}
+        minPolarAngle={DEFAULT_MIN_POLAR_ANGLE}
+        maxPolarAngle={
+          stage === 'drawing' ? DRAWING_MAX_POLAR_ANGLE : DEFAULT_MAX_POLAR_ANGLE
+        }
+        enablePan={
+          stage !== 'drawing' &&
+          !patternPickerVisible &&
+          !isGeneratedRevealActive
+        }
+      />
+      <DrawingCameraController
+        stage={stage}
+        scanAltitude={scanAltitude}
+        points={points}
+        cameraTarget={cameraTarget}
+        draggingPointId={draggingPointId}
+        patternPickerVisible={patternPickerVisible}
+        orbitControlsRef={orbitControlsRef}
+      />
+      <GeneratedCameraController
+        stage={stage}
+        scanAltitude={scanAltitude}
+        points={points}
+        waypoints={waypoints}
+        selectedWaypointId={selectedWaypointId}
+        orbitControlsRef={orbitControlsRef}
+        onRevealActiveChange={setIsGeneratedRevealActive}
       />
     </Canvas>
   )
 }
 
 interface MissionWorldProps extends MissionViewport3DProps {
+  generatedRevealLocked: boolean
   hoverPoint: Vec2 | null
   draggingPointId: number | null
   onHoverPointChange: (point: Vec2 | null) => void
@@ -130,6 +213,10 @@ function MissionWorld({
   coverageSegments,
   waypoints,
   selectedWaypointId,
+  selectedPattern,
+  hoveredPattern,
+  patternPickerVisible,
+  generatedRevealLocked,
   onStartDrawing,
   hoverPoint,
   draggingPointId,
@@ -137,10 +224,18 @@ function MissionWorld({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onReadyToCloseChange,
+  onPatternPickerAnchorChange,
   onHoverPointChange,
   onDraggingPointChange,
 }: MissionWorldProps) {
   const { camera, gl } = useThree()
+  const [isReadyToClose, setIsReadyToClose] = useState(false)
+  const activePreviewPattern = stage === 'editing' ? hoveredPattern ?? selectedPattern : null
+
+  useEffect(() => {
+    onReadyToCloseChange?.(isReadyToClose)
+  }, [isReadyToClose, onReadyToCloseChange])
 
   useEffect(() => {
     if (draggingPointId === null) {
@@ -206,10 +301,16 @@ function MissionWorld({
       toAltitudePlanePosition(point, scanAltitude, ALTITUDE_LINE_OFFSET),
     )
 
-    if (isPlaneInteractive && hoverPoint) {
+    const snappedPreviewPoint = isReadyToClose ? points[0] : hoverPoint
+
+    if (isPlaneInteractive && snappedPreviewPoint) {
       return [
         ...polyline,
-        toAltitudePlanePosition(hoverPoint, scanAltitude, ALTITUDE_LINE_OFFSET),
+        toAltitudePlanePosition(
+          snappedPreviewPoint,
+          scanAltitude,
+          ALTITUDE_LINE_OFFSET,
+        ),
       ]
     }
 
@@ -221,9 +322,9 @@ function MissionWorld({
     }
 
     return polyline
-  }, [hoverPoint, isPlaneInteractive, points, scanAltitude, stage])
+  }, [hoverPoint, isPlaneInteractive, isReadyToClose, points, scanAltitude, stage])
   const hoverLinkPoints = useMemo(() => {
-    if (!canClosePolygon || !hoverPoint || points.length === 0) {
+    if (!canClosePolygon || !hoverPoint || points.length === 0 || isReadyToClose) {
       return null
     }
 
@@ -231,7 +332,7 @@ function MissionWorld({
       toAltitudePlanePosition(hoverPoint, scanAltitude, ALTITUDE_LINE_OFFSET),
       toAltitudePlanePosition(points[0], scanAltitude, ALTITUDE_LINE_OFFSET),
     ]
-  }, [canClosePolygon, hoverPoint, points, scanAltitude])
+  }, [canClosePolygon, hoverPoint, isReadyToClose, points, scanAltitude])
   const polygonShape = useMemo(() => {
     if (points.length < 3) {
       return null
@@ -295,11 +396,32 @@ function MissionWorld({
       return
     }
 
-    onHoverPointChange(clampScenePoint(event.point))
+    const nextHoverPoint = clampScenePoint(event.point)
+    onHoverPointChange(nextHoverPoint)
+
+    if (!canClosePolygon || points.length === 0) {
+      setIsReadyToClose(false)
+      return
+    }
+
+    setIsReadyToClose(
+      isWithinCloseSnapRadius({
+        camera,
+        bounds: gl.domElement.getBoundingClientRect(),
+        clientX: event.clientX,
+        clientY: event.clientY,
+        point: points[0],
+        altitude: scanAltitude,
+      }),
+    )
   }
 
   function handleAltitudePlaneClick(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation()
+
+    if (generatedRevealLocked) {
+      return
+    }
 
     if (!isPrimaryClickGesture(event)) {
       return
@@ -307,13 +429,22 @@ function MissionWorld({
 
     if (stage === 'setup') {
       const nextPoint = clampScenePoint(event.point)
+      setIsReadyToClose(false)
       onStartDrawing()
       onAddPoint(nextPoint.x, nextPoint.y)
       return
     }
 
     if (stage === 'drawing') {
+      if (isReadyToClose && canClosePolygon) {
+        onHoverPointChange(null)
+        setIsReadyToClose(false)
+        onClosePolygon()
+        return
+      }
+
       const nextPoint = clampScenePoint(event.point)
+      setIsReadyToClose(false)
       onAddPoint(nextPoint.x, nextPoint.y)
       return
     }
@@ -348,6 +479,7 @@ function MissionWorld({
 
     if (pointIndex === 0 && canClosePolygon) {
       onHoverPointChange(null)
+      setIsReadyToClose(false)
       onClosePolygon()
     }
   }
@@ -357,6 +489,13 @@ function MissionWorld({
       <ambientLight intensity={1.05} />
       <hemisphereLight intensity={0.7} color="#ffffff" groundColor="#8fa0b8" />
       <directionalLight position={[96, 180, 72]} intensity={1.12} />
+
+      <PatternPickerAnchorObserver
+        visible={patternPickerVisible}
+        points={points}
+        altitude={scanAltitude}
+        onAnchorChange={onPatternPickerAnchorChange}
+      />
 
       <mesh rotation-x={-Math.PI / 2} position={[0, -1.6, 0]}>
         <planeGeometry
@@ -404,6 +543,7 @@ function MissionWorld({
             onPointerLeave={() => {
               if (draggingPointId === null) {
                 onHoverPointChange(null)
+                setIsReadyToClose(false)
               }
             }}
             onClick={handleAltitudePlaneClick}
@@ -440,7 +580,7 @@ function MissionWorld({
         </>
       )}
 
-      {polygonShape && stage !== 'drawing' && (
+      {polygonShape && (stage !== 'drawing' || isReadyToClose) && (
         <mesh
           rotation-x={-Math.PI / 2}
           position={[0, scanAltitude + ALTITUDE_PLANE_FILL_OFFSET, 0]}
@@ -449,7 +589,7 @@ function MissionWorld({
           <meshStandardMaterial
             color="#8b5cf6"
             transparent
-            opacity={stage === 'generated' ? 0.14 : 0.2}
+            opacity={stage === 'generated' ? 0.14 : isReadyToClose ? 0.12 : 0.2}
           />
         </mesh>
       )}
@@ -494,6 +634,14 @@ function MissionWorld({
           />
         ))}
 
+      {stage === 'editing' && activePreviewPattern && activePreviewPattern !== 'coverage' && (
+        <PatternPreviewOverlay
+          pattern={activePreviewPattern}
+          points={points}
+          altitude={scanAltitude}
+        />
+      )}
+
       {stage === 'generated' &&
         waypoints.map((waypoint) => (
           <Line
@@ -517,17 +665,16 @@ function MissionWorld({
           <group
             key={point.id}
             position={toAltitudeMarkerPosition(point, scanAltitude)}
+            scale={
+              index === 0 && canClosePolygon && isReadyToClose
+                ? [1.18, 1.18, 1.18]
+                : [1, 1, 1]
+            }
             onPointerDown={(event) => handleVertexPointerDown(event, point.id)}
             onClick={(event) => handleVertexClick(event, index)}
           >
             {index === 0 && canClosePolygon && (
-              <mesh
-                rotation-x={-Math.PI / 2}
-                position={[0, -ALTITUDE_MARKER_LIFT + ALTITUDE_LINE_OFFSET, 0]}
-              >
-                <ringGeometry args={[4.8, 6.8, 64]} />
-                <meshBasicMaterial color="#7c6bff" transparent opacity={0.22} />
-              </mesh>
+              <CloseLoopRing active={isReadyToClose} />
             )}
 
             <mesh>
@@ -563,7 +710,7 @@ function MissionWorld({
           </group>
         ))}
 
-      {hoverPoint && isPlaneInteractive && (
+      {hoverPoint && isPlaneInteractive && !isReadyToClose && (
         <>
           <Line
             points={[
@@ -597,6 +744,11 @@ function MissionWorld({
               position={toAltitudeMarkerPosition(waypoint, waypoint.z)}
               onClick={(event) => {
                 event.stopPropagation()
+
+                if (generatedRevealLocked) {
+                  return
+                }
+
                 onSelectWaypoint(waypoint.id)
               }}
             >
@@ -659,6 +811,301 @@ function MissionWorld({
   )
 }
 
+function DrawingCameraController({
+  stage,
+  scanAltitude,
+  points,
+  cameraTarget,
+  draggingPointId,
+  patternPickerVisible,
+  orbitControlsRef,
+}: {
+  stage: MissionStage
+  scanAltitude: number
+  points: MissionPoint[]
+  cameraTarget: Vec2
+  draggingPointId: number | null
+  patternPickerVisible: boolean
+  orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
+}) {
+  const { camera } = useThree()
+  const desiredTarget = useMemo(
+    () =>
+      new THREE.Vector3(
+        cameraTarget.x,
+        stage === 'idle' ? 0 : scanAltitude,
+        cameraTarget.y,
+      ),
+    [cameraTarget, scanAltitude, stage],
+  )
+
+  useEffect(() => {
+    const controls = orbitControlsRef.current
+
+    if (!controls) {
+      return
+    }
+
+    controls.enabled = draggingPointId === null && !patternPickerVisible
+    controls.enablePan = stage !== 'drawing' && !patternPickerVisible
+    controls.enableRotate = true
+    controls.enableZoom = true
+    controls.minPolarAngle = DEFAULT_MIN_POLAR_ANGLE
+    controls.maxPolarAngle =
+      stage === 'drawing' ? DRAWING_MAX_POLAR_ANGLE : DEFAULT_MAX_POLAR_ANGLE
+    controls.update()
+  }, [draggingPointId, orbitControlsRef, patternPickerVisible, stage])
+
+  useFrame((_, delta) => {
+    const controls = orbitControlsRef.current
+
+    if (!controls || !(camera instanceof THREE.PerspectiveCamera)) {
+      return
+    }
+
+    if (patternPickerVisible || draggingPointId !== null) {
+      return
+    }
+
+    if (stage !== 'drawing' && stage !== 'setup' && stage !== 'editing') {
+      return
+    }
+
+    const nextOffset = camera.position.clone().sub(controls.target)
+
+    if (nextOffset.lengthSq() === 0) {
+      nextOffset.set(...CAMERA_POSITION).sub(desiredTarget)
+    }
+
+    const targetAlpha = 1 - Math.exp(-delta * DRAWING_TARGET_LERP_SPEED)
+    controls.target.lerp(desiredTarget, targetAlpha)
+
+    if (stage === 'drawing') {
+      const currentDistance = nextOffset.length()
+      const desiredDistance = getDrawingFitDistance(points, camera, scanAltitude)
+
+      if (desiredDistance > currentDistance + 0.5) {
+        nextOffset.setLength(
+          THREE.MathUtils.damp(
+            currentDistance,
+            desiredDistance,
+            DRAWING_DISTANCE_DAMP_SPEED,
+            delta,
+          ),
+        )
+      }
+    }
+
+    camera.position.copy(controls.target.clone().add(nextOffset))
+    controls.update()
+  })
+
+  return null
+}
+
+function GeneratedCameraController({
+  stage,
+  scanAltitude,
+  points,
+  waypoints,
+  selectedWaypointId,
+  orbitControlsRef,
+  onRevealActiveChange,
+}: {
+  stage: MissionStage
+  scanAltitude: number
+  points: MissionPoint[]
+  waypoints: MissionWaypoint[]
+  selectedWaypointId: number | null
+  orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
+  onRevealActiveChange: (active: boolean) => void
+}) {
+  const { camera } = useThree()
+  const previousStageRef = useRef<MissionStage>(stage)
+  const previousSelectedWaypointIdRef = useRef<number | null>(selectedWaypointId)
+  const revealAnimationRef = useRef<CameraAnimation | null>(null)
+  const recenterAnimationRef = useRef<CameraAnimation | null>(null)
+  const revealLockedRef = useRef(false)
+  const missionCenter = useMemo(() => {
+    if (points.length > 0) {
+      return polygonCentroid(points)
+    }
+
+    if (waypoints.length > 0) {
+      return polygonCentroid(waypoints)
+    }
+
+    return WORLD_CENTER
+  }, [points, waypoints])
+  const selectedWaypoint = useMemo(
+    () =>
+      selectedWaypointId === null
+        ? null
+        : waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
+    [selectedWaypointId, waypoints],
+  )
+
+  useEffect(() => {
+    if (stage === 'generated') {
+      return
+    }
+
+    revealAnimationRef.current = null
+    recenterAnimationRef.current = null
+    previousSelectedWaypointIdRef.current = selectedWaypointId
+
+    if (revealLockedRef.current) {
+      revealLockedRef.current = false
+      onRevealActiveChange(false)
+    }
+  }, [onRevealActiveChange, selectedWaypointId, stage])
+
+  useEffect(() => {
+    const previousStage = previousStageRef.current
+    previousStageRef.current = stage
+
+    if (stage !== 'generated' || previousStage === 'generated') {
+      return
+    }
+
+    if (!(camera instanceof THREE.PerspectiveCamera)) {
+      return
+    }
+
+    const controls = orbitControlsRef.current
+
+    if (!controls) {
+      return
+    }
+
+    const fitFrame = getMissionFitFrame({
+      camera,
+      controls,
+      points,
+      waypoints,
+      altitude: scanAltitude,
+    })
+
+    if (!fitFrame) {
+      return
+    }
+
+    revealAnimationRef.current = {
+      elapsed: 0,
+      duration: GENERATED_REVEAL_DURATION,
+      fromPosition: camera.position.clone(),
+      fromTarget: controls.target.clone(),
+      toPosition: fitFrame.position,
+      toTarget: fitFrame.target,
+    }
+    recenterAnimationRef.current = null
+    previousSelectedWaypointIdRef.current = null
+
+    if (!revealLockedRef.current) {
+      revealLockedRef.current = true
+      onRevealActiveChange(true)
+    }
+  }, [camera, onRevealActiveChange, orbitControlsRef, points, scanAltitude, stage, waypoints])
+
+  useEffect(() => {
+    if (stage !== 'generated') {
+      return
+    }
+
+    if (!(camera instanceof THREE.PerspectiveCamera)) {
+      return
+    }
+
+    if (revealAnimationRef.current) {
+      return
+    }
+
+    if (previousSelectedWaypointIdRef.current === selectedWaypointId) {
+      return
+    }
+
+    const controls = orbitControlsRef.current
+
+    if (!controls) {
+      return
+    }
+
+    previousSelectedWaypointIdRef.current = selectedWaypointId
+
+    const desiredTarget = getGeneratedFocusTarget({
+      missionCenter,
+      selectedWaypoint,
+      altitude: scanAltitude,
+    })
+    const currentOffset = camera.position.clone().sub(controls.target)
+
+    if (currentOffset.lengthSq() === 0) {
+      currentOffset.set(...CAMERA_POSITION).sub(desiredTarget)
+    }
+
+    recenterAnimationRef.current = {
+      elapsed: 0,
+      duration: GENERATED_RECENTER_DURATION,
+      fromPosition: camera.position.clone(),
+      fromTarget: controls.target.clone(),
+      toPosition: desiredTarget.clone().add(currentOffset),
+      toTarget: desiredTarget,
+    }
+  }, [
+    camera,
+    missionCenter,
+    onRevealActiveChange,
+    orbitControlsRef,
+    scanAltitude,
+    selectedWaypoint,
+    selectedWaypointId,
+    stage,
+  ])
+
+  useFrame((_, delta) => {
+    const controls = orbitControlsRef.current
+
+    if (!controls || !(camera instanceof THREE.PerspectiveCamera) || stage !== 'generated') {
+      return
+    }
+
+    if (revealAnimationRef.current) {
+      const isDone = advanceCameraAnimation({
+        animation: revealAnimationRef.current,
+        camera,
+        controls,
+        delta,
+      })
+
+      if (isDone) {
+        revealAnimationRef.current = null
+
+        if (revealLockedRef.current) {
+          revealLockedRef.current = false
+          onRevealActiveChange(false)
+        }
+      }
+
+      return
+    }
+
+    if (recenterAnimationRef.current) {
+      const isDone = advanceCameraAnimation({
+        animation: recenterAnimationRef.current,
+        camera,
+        controls,
+        delta,
+      })
+
+      if (isDone) {
+        recenterAnimationRef.current = null
+      }
+    }
+  })
+
+  return null
+}
+
 function AltitudeBeacon({
   anchor,
   isMissionGenerated,
@@ -717,6 +1164,147 @@ function AltitudeBeacon({
   )
 }
 
+function CloseLoopRing({ active }: { active: boolean }) {
+  const pulseRef = useRef<THREE.Mesh>(null)
+  const pulseMaterialRef = useRef<THREE.MeshBasicMaterial>(null)
+
+  useFrame(({ clock }) => {
+    if (!pulseRef.current || !pulseMaterialRef.current) {
+      return
+    }
+
+    const cycle = active ? (clock.getElapsedTime() * 1.75) % 1 : 0
+    const scale = active ? 1.1 + cycle * 0.72 : 1
+    const opacity = active ? 0.24 * (1 - cycle) : 0
+
+    pulseRef.current.scale.setScalar(scale)
+    pulseMaterialRef.current.opacity = opacity
+  })
+
+  return (
+    <>
+      <mesh
+        rotation-x={-Math.PI / 2}
+        position={[0, -ALTITUDE_MARKER_LIFT + ALTITUDE_LINE_OFFSET, 0]}
+      >
+        <ringGeometry args={active ? [5.2, 7.3, 64] : [4.8, 6.8, 64]} />
+        <meshBasicMaterial
+          color="#7c6bff"
+          transparent
+          opacity={active ? 0.38 : 0.22}
+        />
+      </mesh>
+
+      {active && (
+        <mesh
+          ref={pulseRef}
+          rotation-x={-Math.PI / 2}
+          position={[0, -ALTITUDE_MARKER_LIFT + ALTITUDE_LINE_OFFSET, 0]}
+        >
+          <ringGeometry args={[5.1, 7.1, 64]} />
+          <meshBasicMaterial
+            ref={pulseMaterialRef}
+            color="#8b5cf6"
+            transparent
+            opacity={0.24}
+          />
+        </mesh>
+      )}
+    </>
+  )
+}
+
+function PatternPickerAnchorObserver({
+  visible,
+  points,
+  altitude,
+  onAnchorChange,
+}: {
+  visible: boolean
+  points: MissionPoint[]
+  altitude: number
+  onAnchorChange?: (anchor: Vec2 | null) => void
+}) {
+  const { camera, gl } = useThree()
+  const lastAnchorRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!visible) {
+      lastAnchorRef.current = null
+      onAnchorChange?.(null)
+    }
+  }, [onAnchorChange, visible])
+
+  useFrame(() => {
+    if (!visible || points.length < 3 || !onAnchorChange) {
+      return
+    }
+
+    const centroid = polygonCentroid(points)
+    const nextAnchor = projectScenePointToViewport(
+      new THREE.Vector3(...toAltitudePlanePosition(centroid, altitude)),
+      camera,
+      gl.domElement.getBoundingClientRect(),
+    )
+
+    if (!nextAnchor) {
+      return
+    }
+
+    const roundedAnchor = {
+      x: Math.round(nextAnchor.x),
+      y: Math.round(nextAnchor.y),
+    }
+    const signature = `${roundedAnchor.x}:${roundedAnchor.y}`
+
+    if (lastAnchorRef.current === signature) {
+      return
+    }
+
+    lastAnchorRef.current = signature
+    onAnchorChange(roundedAnchor)
+  })
+
+  return null
+}
+
+function PatternPreviewOverlay({
+  pattern,
+  points,
+  altitude,
+}: {
+  pattern: FlightPatternId
+  points: MissionPoint[]
+  altitude: number
+}) {
+  const color = getFlightPatternOption(pattern).color
+  const previewSeries = useMemo(
+    () => buildPatternPreviewSeries(pattern, points, altitude),
+    [altitude, pattern, points],
+  )
+
+  if (previewSeries.length === 0) {
+    return null
+  }
+
+  return (
+    <>
+      {previewSeries.map((series, index) => (
+        <Line
+          key={`${pattern}-${index}`}
+          points={series}
+          color={color}
+          transparent
+          opacity={0.84}
+          dashed
+          dashSize={4}
+          gapSize={3}
+        />
+      ))}
+    </>
+  )
+}
+
 function getRectBorder(height: number): ScenePoint[] {
   return [
     [WORLD_BOUNDS.minX, height, WORLD_BOUNDS.minY],
@@ -767,4 +1355,359 @@ function clampScenePoint(point: THREE.Vector3): Vec2 {
     x: point.x,
     y: point.z,
   })
+}
+
+function isWithinCloseSnapRadius({
+  camera,
+  bounds,
+  clientX,
+  clientY,
+  point,
+  altitude,
+}: {
+  camera: THREE.Camera
+  bounds: DOMRect
+  clientX: number
+  clientY: number
+  point: Pick<MissionPoint, 'x' | 'y'>
+  altitude: number
+}): boolean {
+  const viewportPoint = projectScenePointToViewport(
+    new THREE.Vector3(...toAltitudeMarkerPosition(point, altitude)),
+    camera,
+    bounds,
+  )
+
+  if (viewportPoint === null) {
+    return false
+  }
+
+  const pointerX = clientX - bounds.left
+  const pointerY = clientY - bounds.top
+
+  return Math.hypot(pointerX - viewportPoint.x, pointerY - viewportPoint.y) <= CLOSE_SNAP_RADIUS_PX
+}
+
+function projectScenePointToViewport(
+  point: THREE.Vector3,
+  camera: THREE.Camera,
+  bounds: DOMRect,
+): Vec2 | null {
+  const projected = point.clone().project(camera)
+
+  if (projected.z < -1 || projected.z > 1) {
+    return null
+  }
+
+  return {
+    x: (projected.x * 0.5 + 0.5) * bounds.width,
+    y: (-projected.y * 0.5 + 0.5) * bounds.height,
+  }
+}
+
+type CameraAnimation = {
+  elapsed: number
+  duration: number
+  fromPosition: THREE.Vector3
+  fromTarget: THREE.Vector3
+  toPosition: THREE.Vector3
+  toTarget: THREE.Vector3
+}
+
+function getMissionFitFrame({
+  camera,
+  controls,
+  points,
+  waypoints,
+  altitude,
+}: {
+  camera: THREE.PerspectiveCamera
+  controls: OrbitControlsHandle
+  points: MissionPoint[]
+  waypoints: MissionWaypoint[]
+  altitude: number
+}): { position: THREE.Vector3; target: THREE.Vector3 } | null {
+  const focusPoints = [
+    ...points.map((point) => new THREE.Vector3(point.x, altitude, point.y)),
+    ...waypoints.map(
+      (waypoint) => new THREE.Vector3(waypoint.x, waypoint.z, waypoint.y),
+    ),
+  ]
+
+  if (focusPoints.length === 0) {
+    return null
+  }
+
+  const bounds = new THREE.Box3().setFromPoints(focusPoints)
+  const sphere = bounds.getBoundingSphere(new THREE.Sphere())
+  const fitCenter = sphere.center
+  const fitRadius = Math.max(sphere.radius, 18)
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov)
+  const horizontalFov =
+    2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 1))
+  const limitingFov = Math.min(verticalFov, horizontalFov)
+  const fitDistance = THREE.MathUtils.clamp(
+    (fitRadius * FIT_PADDING) / Math.sin(limitingFov / 2),
+    MIN_CAMERA_DISTANCE,
+    MAX_CAMERA_DISTANCE,
+  )
+  const currentDirection = camera.position.clone().sub(controls.target)
+
+  if (currentDirection.lengthSq() === 0) {
+    currentDirection.set(...CAMERA_POSITION).sub(
+      new THREE.Vector3(fitCenter.x, fitCenter.y, fitCenter.z),
+    )
+  }
+
+  currentDirection.normalize()
+
+  return {
+    position: fitCenter.clone().add(currentDirection.multiplyScalar(fitDistance)),
+    target: fitCenter.clone(),
+  }
+}
+
+function getDrawingFitDistance(
+  points: MissionPoint[],
+  camera: THREE.PerspectiveCamera,
+  altitude: number,
+): number {
+  if (points.length < 2) {
+    return 0
+  }
+
+  const pointCloud = points.map(
+    (point) => new THREE.Vector3(point.x, altitude, point.y),
+  )
+  const bounds = new THREE.Box3().setFromPoints(pointCloud)
+  const sphere = bounds.getBoundingSphere(new THREE.Sphere())
+  const fitRadius = Math.max(sphere.radius, 18)
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov)
+  const horizontalFov =
+    2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 1))
+  const limitingFov = Math.min(verticalFov, horizontalFov)
+
+  return THREE.MathUtils.clamp(
+    (fitRadius * DRAWING_FIT_PADDING) / Math.sin(limitingFov / 2),
+    MIN_CAMERA_DISTANCE,
+    MAX_CAMERA_DISTANCE,
+  )
+}
+
+function getGeneratedFocusTarget({
+  missionCenter,
+  selectedWaypoint,
+  altitude,
+}: {
+  missionCenter: Vec2
+  selectedWaypoint: MissionWaypoint | null
+  altitude: number
+}): THREE.Vector3 {
+  const baseTarget = new THREE.Vector3(missionCenter.x, altitude, missionCenter.y)
+
+  if (!selectedWaypoint) {
+    return baseTarget
+  }
+
+  return baseTarget.lerp(
+    new THREE.Vector3(
+      selectedWaypoint.x,
+      selectedWaypoint.z,
+      selectedWaypoint.y,
+    ),
+    GENERATED_SELECTION_BLEND,
+  )
+}
+
+function advanceCameraAnimation({
+  animation,
+  camera,
+  controls,
+  delta,
+}: {
+  animation: CameraAnimation
+  camera: THREE.PerspectiveCamera
+  controls: OrbitControlsHandle
+  delta: number
+}): boolean {
+  animation.elapsed = Math.min(animation.elapsed + delta, animation.duration)
+
+  const progress = animation.duration === 0 ? 1 : animation.elapsed / animation.duration
+  const easedProgress = 1 - (1 - progress) ** 3
+  const nextPosition = animation.fromPosition
+    .clone()
+    .lerp(animation.toPosition, easedProgress)
+  const nextTarget = animation.fromTarget
+    .clone()
+    .lerp(animation.toTarget, easedProgress)
+
+  camera.position.copy(nextPosition)
+  controls.target.copy(nextTarget)
+  controls.update()
+
+  return progress >= 1
+}
+
+function buildPatternPreviewSeries(
+  pattern: FlightPatternId,
+  points: MissionPoint[],
+  altitude: number,
+): ScenePoint[][] {
+  if (points.length < 3) {
+    return []
+  }
+
+  const centroid = polygonCentroid(points)
+  const bounds = getPointBounds(points)
+  const width = Math.max(bounds.maxX - bounds.minX, 18)
+  const height = Math.max(bounds.maxY - bounds.minY, 18)
+  const horizontalRadius = width * 0.38
+  const verticalRadius = height * 0.38
+
+  switch (pattern) {
+    case 'perimeter':
+      return [[
+        ...points.map((point) => toAltitudePlanePosition(point, altitude, ALTITUDE_LINE_OFFSET)),
+        toAltitudePlanePosition(points[0], altitude, ALTITUDE_LINE_OFFSET),
+      ]]
+    case 'orbit':
+      return [buildEllipseSeries(centroid, horizontalRadius, verticalRadius, altitude, 36)]
+    case 'spiral':
+      return [buildSpiralSeries(centroid, horizontalRadius, verticalRadius, altitude)]
+    case 'grid':
+      return buildGridSeries(bounds, altitude)
+    case 'corridor':
+      return buildCorridorSeries(bounds, centroid, altitude)
+    case 'coverage':
+      return []
+  }
+}
+
+function buildEllipseSeries(
+  center: Vec2,
+  radiusX: number,
+  radiusY: number,
+  altitude: number,
+  segments: number,
+): ScenePoint[] {
+  const points: ScenePoint[] = []
+
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = (index / segments) * Math.PI * 2
+    points.push([
+      center.x + Math.cos(angle) * radiusX,
+      altitude + ALTITUDE_LINE_OFFSET,
+      center.y + Math.sin(angle) * radiusY,
+    ])
+  }
+
+  return points
+}
+
+function buildSpiralSeries(
+  center: Vec2,
+  radiusX: number,
+  radiusY: number,
+  altitude: number,
+): ScenePoint[] {
+  const points: ScenePoint[] = []
+  const steps = 42
+
+  for (let index = 0; index <= steps; index += 1) {
+    const progress = index / steps
+    const angle = progress * Math.PI * 4.6
+    const currentRadiusX = radiusX * (1 - progress * 0.82)
+    const currentRadiusY = radiusY * (1 - progress * 0.82)
+    points.push([
+      center.x + Math.cos(angle) * currentRadiusX,
+      altitude + ALTITUDE_LINE_OFFSET,
+      center.y + Math.sin(angle) * currentRadiusY,
+    ])
+  }
+
+  return points
+}
+
+function buildGridSeries(
+  bounds: { minX: number; maxX: number; minY: number; maxY: number },
+  altitude: number,
+): ScenePoint[][] {
+  const inset = 6
+  const step = 18
+  const series: ScenePoint[][] = []
+
+  for (let x = bounds.minX + inset; x <= bounds.maxX - inset; x += step) {
+    series.push([
+      [x, altitude + ALTITUDE_LINE_OFFSET, bounds.minY + inset],
+      [x, altitude + ALTITUDE_LINE_OFFSET, bounds.maxY - inset],
+    ])
+  }
+
+  for (let y = bounds.minY + inset; y <= bounds.maxY - inset; y += step) {
+    series.push([
+      [bounds.minX + inset, altitude + ALTITUDE_LINE_OFFSET, y],
+      [bounds.maxX - inset, altitude + ALTITUDE_LINE_OFFSET, y],
+    ])
+  }
+
+  return series
+}
+
+function buildCorridorSeries(
+  bounds: { minX: number; maxX: number; minY: number; maxY: number },
+  center: Vec2,
+  altitude: number,
+): ScenePoint[][] {
+  const width = bounds.maxX - bounds.minX
+  const height = bounds.maxY - bounds.minY
+  const corridorOffset = 10
+
+  if (width >= height) {
+    return [
+      [
+        [bounds.minX, altitude + ALTITUDE_LINE_OFFSET, center.y],
+        [bounds.maxX, altitude + ALTITUDE_LINE_OFFSET, center.y],
+      ],
+      [
+        [bounds.minX + 8, altitude + ALTITUDE_LINE_OFFSET, center.y - corridorOffset],
+        [bounds.maxX - 8, altitude + ALTITUDE_LINE_OFFSET, center.y - corridorOffset],
+      ],
+      [
+        [bounds.minX + 8, altitude + ALTITUDE_LINE_OFFSET, center.y + corridorOffset],
+        [bounds.maxX - 8, altitude + ALTITUDE_LINE_OFFSET, center.y + corridorOffset],
+      ],
+    ]
+  }
+
+  return [
+    [
+      [center.x, altitude + ALTITUDE_LINE_OFFSET, bounds.minY],
+      [center.x, altitude + ALTITUDE_LINE_OFFSET, bounds.maxY],
+    ],
+    [
+      [center.x - corridorOffset, altitude + ALTITUDE_LINE_OFFSET, bounds.minY + 8],
+      [center.x - corridorOffset, altitude + ALTITUDE_LINE_OFFSET, bounds.maxY - 8],
+    ],
+    [
+      [center.x + corridorOffset, altitude + ALTITUDE_LINE_OFFSET, bounds.minY + 8],
+      [center.x + ALTITUDE_LINE_OFFSET * 0 + corridorOffset, altitude + ALTITUDE_LINE_OFFSET, bounds.maxY - 8],
+    ],
+  ]
+}
+
+function getPointBounds(points: MissionPoint[]) {
+  return points.reduce(
+    (accumulator, point) => ({
+      minX: Math.min(accumulator.minX, point.x),
+      maxX: Math.max(accumulator.maxX, point.x),
+      minY: Math.min(accumulator.minY, point.y),
+      maxY: Math.max(accumulator.maxY, point.y),
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    },
+  )
 }
