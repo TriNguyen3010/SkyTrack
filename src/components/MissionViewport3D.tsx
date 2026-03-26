@@ -31,6 +31,7 @@ const ALTITUDE_LINE_OFFSET = 0.18
 const ALTITUDE_MARKER_LIFT = 2.6
 const HOVER_OFFSET = 0.28
 const DRONE_LIFT = 6
+const MAX_CLICK_DELTA = 4
 type ScenePoint = [number, number, number]
 
 interface MissionViewport3DProps {
@@ -308,6 +309,10 @@ function MissionWorld({
   function handleAltitudePlaneClick(event: ThreeEvent<MouseEvent>) {
     event.stopPropagation()
 
+    if (!isPrimaryClickGesture(event)) {
+      return
+    }
+
     if (stage === 'setup') {
       const nextPoint = clampScenePoint(event.point)
       onStartDrawing()
@@ -344,6 +349,10 @@ function MissionWorld({
     pointIndex: number,
   ) {
     event.stopPropagation()
+
+    if (!isPrimaryClickGesture(event)) {
+      return
+    }
 
     if (pointIndex === 0 && canClosePolygon) {
       onHoverPointChange(null)
@@ -736,6 +745,10 @@ function toDronePosition(
 
 function toShapePlaneY(value: number): number {
   return -value
+}
+
+function isPrimaryClickGesture(event: ThreeEvent<MouseEvent>): boolean {
+  return event.button === 0 && event.delta <= MAX_CLICK_DELTA
 }
 
 function clampScenePoint(point: THREE.Vector3): Vec2 {
