@@ -143,11 +143,27 @@
   pointer-events: none;
 }
 
+.viewport-hint.is-warning {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(255, 251, 235, 0.96);
+  color: #92400e;
+}
+
+.viewport-hint.is-danger {
+  border-color: rgba(239, 68, 68, 0.22);
+  background: rgba(254, 242, 242, 0.97);
+  color: #b91c1c;
+}
+
 .hint-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #f59e0b;
+}
+
+.viewport-hint.is-danger .hint-dot {
+  background: #ef4444;
 }
 
 .ground-plane-shape {
@@ -660,6 +676,29 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.validation-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: 10px;
+  background: rgba(254, 242, 242, 0.94);
+  padding: 11px 12px;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.validation-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ef4444;
+  margin-top: 5px;
+  flex-shrink: 0;
 }
 
 .summary-card {

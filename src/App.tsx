@@ -18,11 +18,13 @@ import {
   Route,
   ScanLine,
 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { MissionViewport3D } from './components/MissionViewport3D'
 import {
+  canAppendPointToOpenPath,
   generateCoverageSegments,
   generateCoverageWaypoints,
+  isSimplePolygon,
   polygonArea,
 } from './lib/missionGeometry'
 import {
@@ -38,6 +40,11 @@ const toolbarItems = [
   { id: 'shape', label: 'Shapes', icon: Hexagon },
   { id: 'select', label: 'Select', icon: MousePointer2 },
 ] as const
+
+interface InteractionNotice {
+  tone: 'warning' | 'danger'
+  message: string
+}
 
 function App() {
   const operationMode = useMissionStore((state) => state.operationMode)
@@ -66,13 +73,18 @@ function App() {
   const addPoint = useMissionStore((state) => state.addPoint)
   const updatePoint = useMissionStore((state) => state.updatePoint)
   const selectWaypoint = useMissionStore((state) => state.selectWaypoint)
+  const [interactionNotice, setInteractionNotice] = useState<InteractionNotice | null>(null)
+  const isPolygonValid = useMemo(
+    () => points.length >= 3 && isSimplePolygon(points),
+    [points],
+  )
 
   const coverageSegments = useMemo(
     () =>
-      stage === 'editing' || stage === 'generated'
+      (stage === 'editing' || stage === 'generated') && isPolygonValid
         ? generateCoverageSegments(points, lineSpacing, orientation)
         : [],
-    [lineSpacing, orientation, points, stage],
+    [isPolygonValid, lineSpacing, orientation, points, stage],
   )
   const generatedWaypoints = useMemo(
     () => generateCoverageWaypoints(coverageSegments, scanAltitude),
@@ -83,14 +95,81 @@ function App() {
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
     [selectedWaypointId, waypoints],
   )
+  const activeNotice =
+    interactionNotice &&
+    (stage === 'setup' || stage === 'drawing' || stage === 'editing')
+      ? interactionNotice
+      : null
 
-  function handleGeneratePath() {
-    if (generatedWaypoints.length === 0) {
+  function clearInteractionNotice() {
+    setInteractionNotice(null)
+  }
+
+  function handleAddPoint(x: number, y: number) {
+    if (!canAppendPointToOpenPath(points, { x, y })) {
+      setInteractionNotice({
+        tone: 'danger',
+        message: 'Path cannot cross itself. Place the next point along the outer boundary.',
+      })
       return
     }
 
+    clearInteractionNotice()
+    addPoint(x, y)
+  }
+
+  function handleUpdatePoint(id: number, x: number, y: number) {
+    const candidate = points.map((point) => (point.id === id ? { ...point, x, y } : point))
+
+    if (!isSimplePolygon(candidate)) {
+      setInteractionNotice({
+        tone: 'danger',
+        message: 'Polygon fill needs a simple boundary. This move would create crossing edges.',
+      })
+      return
+    }
+
+    clearInteractionNotice()
+    updatePoint(id, x, y)
+  }
+
+  function handleClosePolygon() {
+    if (!isPolygonValid) {
+      setInteractionNotice({
+        tone: 'danger',
+        message: 'Close the area with a non-crossing boundary before continuing.',
+      })
+      return
+    }
+
+    clearInteractionNotice()
+    closePolygon()
+  }
+
+  function handleGeneratePath() {
+    if (!isPolygonValid || generatedWaypoints.length === 0) {
+      setInteractionNotice({
+        tone: 'warning',
+        message: 'Coverage path is only available after the polygon boundary is valid.',
+      })
+      return
+    }
+
+    clearInteractionNotice()
     generateMissionPath(generatedWaypoints)
   }
+
+  const viewportHint = activeNotice?.message
+    ? activeNotice.message
+    : stage === 'setup'
+      ? 'Tap highlighted altitude plane to place first point'
+      : stage === 'drawing'
+        ? 'Click first point to close polygon'
+        : stage === 'editing'
+          ? 'Click & drag points to adjust position'
+          : stage === 'generated'
+            ? 'Generated path ready · select waypoint to inspect'
+            : null
 
   return (
     <main className="app-shell">
@@ -137,16 +216,14 @@ function App() {
               stage === 'setup' || stage === 'drawing' ? 'is-drawing' : ''
             }`}
           >
-            {(stage === 'setup' ||
-              stage === 'drawing' ||
-              stage === 'editing' ||
-              stage === 'generated') && (
-              <div className="viewport-hint">
+            {viewportHint && (
+              <div
+                className={`viewport-hint ${
+                  activeNotice ? `is-${activeNotice.tone}` : ''
+                }`}
+              >
                 <span className="hint-dot" />
-                {stage === 'setup' && 'Tap highlighted altitude plane to place first point'}
-                {stage === 'drawing' && 'Click first point to close polygon'}
-                {stage === 'editing' && 'Click & drag points to adjust position'}
-                {stage === 'generated' && 'Generated path ready · select waypoint to inspect'}
+                {viewportHint}
               </div>
             )}
 
@@ -158,9 +235,9 @@ function App() {
               waypoints={waypoints}
               selectedWaypointId={selectedWaypointId}
               onStartDrawing={startDrawing}
-              onAddPoint={addPoint}
-              onUpdatePoint={updatePoint}
-              onClosePolygon={closePolygon}
+              onAddPoint={handleAddPoint}
+              onUpdatePoint={handleUpdatePoint}
+              onClosePolygon={handleClosePolygon}
               onSelectWaypoint={selectWaypoint}
             />
 
@@ -298,7 +375,7 @@ function App() {
 
                 <div className="hint-card">
                   <span className="hint-icon">✦</span>
-                  Click first point to close polygon
+                  {activeNotice?.message ?? 'Click first point to close polygon'}
                 </div>
 
                 <button
@@ -328,6 +405,13 @@ function App() {
                     <strong>{points.length}</strong>
                   </div>
                 </div>
+
+                {activeNotice && (
+                  <div className="validation-card">
+                    <span className="validation-card-dot" />
+                    <span>{activeNotice.message}</span>
+                  </div>
+                )}
 
                 <div className="vertices-card">
                   <div className="vertices-header">
@@ -387,7 +471,7 @@ function App() {
                     type="button"
                     className="button button-primary button-primary-small"
                     onClick={handleGeneratePath}
-                    disabled={generatedWaypoints.length === 0}
+                    disabled={generatedWaypoints.length === 0 || !isPolygonValid}
                   >
                     Generate Path
                   </button>

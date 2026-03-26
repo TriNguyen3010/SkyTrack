@@ -245,13 +245,13 @@ function MissionWorld({
     }
 
     const shape = new THREE.Shape()
-    shape.moveTo(points[0].x, points[0].y)
+    shape.moveTo(points[0].x, toShapePlaneY(points[0].y))
 
     points.slice(1).forEach((point) => {
-      shape.lineTo(point.x, point.y)
+      shape.lineTo(point.x, toShapePlaneY(point.y))
     })
 
-    shape.lineTo(points[0].x, points[0].y)
+    shape.lineTo(points[0].x, toShapePlaneY(points[0].y))
 
     return shape
   }, [points])
@@ -732,6 +732,10 @@ function toDronePosition(
   altitude: number,
 ): ScenePoint {
   return [point.x, altitude + DRONE_LIFT, point.y]
+}
+
+function toShapePlaneY(value: number): number {
+  return -value
 }
 
 function clampScenePoint(point: THREE.Vector3): Vec2 {

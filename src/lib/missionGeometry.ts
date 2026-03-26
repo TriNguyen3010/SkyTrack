@@ -5,6 +5,8 @@ export interface Vec2 {
   y: number
 }
 
+type PointLike = Pick<MissionPoint, 'x' | 'y'>
+
 export interface PlaneGeometry {
   origin: Vec2
   u: Vec2
@@ -26,6 +28,7 @@ export const WORLD_BOUNDS = {
 
 const worldWidth = WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX
 const worldHeight = WORLD_BOUNDS.maxY - WORLD_BOUNDS.minY
+const GEOMETRY_EPSILON = 0.0001
 
 export const WORLD_DIMENSIONS = {
   width: worldWidth,
@@ -227,6 +230,55 @@ export function generateCoverageSegments(
   return segments
 }
 
+export function canAppendPointToOpenPath(
+  points: PointLike[],
+  nextPoint: PointLike,
+): boolean {
+  if (points.some((point) => pointsEqual(point, nextPoint))) {
+    return false
+  }
+
+  const candidate = [...points, nextPoint]
+
+  return !hasOpenPathSelfIntersection(candidate)
+}
+
+export function isSimplePolygon(points: PointLike[]): boolean {
+  if (points.length < 3 || polygonArea(points) < GEOMETRY_EPSILON) {
+    return false
+  }
+
+  if (hasDuplicatePoints(points)) {
+    return false
+  }
+
+  const segments = points.map((point, index) => [
+    point,
+    points[(index + 1) % points.length],
+  ] as const)
+
+  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < segments.length;
+      rightIndex += 1
+    ) {
+      if (areClosedSegmentsAdjacent(leftIndex, rightIndex, segments.length)) {
+        continue
+      }
+
+      const [leftStart, leftEnd] = segments[leftIndex]
+      const [rightStart, rightEnd] = segments[rightIndex]
+
+      if (segmentsIntersect(leftStart, leftEnd, rightStart, rightEnd)) {
+        return false
+      }
+    }
+  }
+
+  return true
+}
+
 export function generateCoverageWaypoints(
   segments: Array<[Vec2, Vec2]>,
   altitude: number,
@@ -278,4 +330,144 @@ function rotatePoint(
     x: center.x + translatedX * cos - translatedY * sin,
     y: center.y + translatedX * sin + translatedY * cos,
   }
+}
+
+function hasOpenPathSelfIntersection(points: PointLike[]): boolean {
+  if (points.length < 4) {
+    return false
+  }
+
+  const segments = points.slice(1).map((point, index) => [
+    points[index],
+    point,
+  ] as const)
+
+  for (let leftIndex = 0; leftIndex < segments.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < segments.length;
+      rightIndex += 1
+    ) {
+      if (Math.abs(leftIndex - rightIndex) <= 1) {
+        continue
+      }
+
+      const [leftStart, leftEnd] = segments[leftIndex]
+      const [rightStart, rightEnd] = segments[rightIndex]
+
+      if (segmentsIntersect(leftStart, leftEnd, rightStart, rightEnd)) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function hasDuplicatePoints(points: PointLike[]): boolean {
+  for (let leftIndex = 0; leftIndex < points.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < points.length;
+      rightIndex += 1
+    ) {
+      if (pointsEqual(points[leftIndex], points[rightIndex])) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function areClosedSegmentsAdjacent(
+  leftIndex: number,
+  rightIndex: number,
+  segmentCount: number,
+): boolean {
+  return (
+    Math.abs(leftIndex - rightIndex) === 1 ||
+    (leftIndex === 0 && rightIndex === segmentCount - 1)
+  )
+}
+
+function segmentsIntersect(
+  firstStart: PointLike,
+  firstEnd: PointLike,
+  secondStart: PointLike,
+  secondEnd: PointLike,
+): boolean {
+  const firstOrientationA = orientation(firstStart, firstEnd, secondStart)
+  const firstOrientationB = orientation(firstStart, firstEnd, secondEnd)
+  const secondOrientationA = orientation(secondStart, secondEnd, firstStart)
+  const secondOrientationB = orientation(secondStart, secondEnd, firstEnd)
+
+  if (
+    firstOrientationA !== firstOrientationB &&
+    secondOrientationA !== secondOrientationB
+  ) {
+    return true
+  }
+
+  if (
+    firstOrientationA === 0 &&
+    isPointOnSegment(secondStart, firstStart, firstEnd)
+  ) {
+    return true
+  }
+
+  if (
+    firstOrientationB === 0 &&
+    isPointOnSegment(secondEnd, firstStart, firstEnd)
+  ) {
+    return true
+  }
+
+  if (
+    secondOrientationA === 0 &&
+    isPointOnSegment(firstStart, secondStart, secondEnd)
+  ) {
+    return true
+  }
+
+  if (
+    secondOrientationB === 0 &&
+    isPointOnSegment(firstEnd, secondStart, secondEnd)
+  ) {
+    return true
+  }
+
+  return false
+}
+
+function orientation(first: PointLike, second: PointLike, third: PointLike): number {
+  const value =
+    (second.y - first.y) * (third.x - second.x) -
+    (second.x - first.x) * (third.y - second.y)
+
+  if (Math.abs(value) < GEOMETRY_EPSILON) {
+    return 0
+  }
+
+  return value > 0 ? 1 : 2
+}
+
+function isPointOnSegment(
+  point: PointLike,
+  start: PointLike,
+  end: PointLike,
+): boolean {
+  return (
+    point.x <= Math.max(start.x, end.x) + GEOMETRY_EPSILON &&
+    point.x + GEOMETRY_EPSILON >= Math.min(start.x, end.x) &&
+    point.y <= Math.max(start.y, end.y) + GEOMETRY_EPSILON &&
+    point.y + GEOMETRY_EPSILON >= Math.min(start.y, end.y)
+  )
+}
+
+function pointsEqual(left: PointLike, right: PointLike): boolean {
+  return (
+    Math.abs(left.x - right.x) < GEOMETRY_EPSILON &&
+    Math.abs(left.y - right.y) < GEOMETRY_EPSILON
+  )
 }
