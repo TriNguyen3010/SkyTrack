@@ -65,27 +65,19 @@ export function MissionViewport3D({
   const [draggingPointId, setDraggingPointId] = useState<number | null>(null)
 
   const cameraTarget = useMemo(() => {
-    const selectedWaypoint =
-      selectedWaypointId === null
-        ? null
-        : waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null
-
-    if (selectedWaypoint) {
-      return {
-        x: selectedWaypoint.x,
-        y: selectedWaypoint.y,
-      }
-    }
-
     if (points.length > 0) {
       return polygonCentroid(points)
     }
 
+    if (waypoints.length > 0) {
+      return polygonCentroid(waypoints)
+    }
+
     return WORLD_CENTER
-  }, [points, selectedWaypointId, waypoints])
+  }, [points, waypoints])
 
   return (
-    <Canvas key={stage} className="viewport-canvas" gl={{ antialias: true }}>
+    <Canvas className="viewport-canvas" gl={{ antialias: true }}>
       <color attach="background" args={['#d6e0ec']} />
       <fog attach="fog" args={['#d6e0ec', 210, 420]} />
       <PerspectiveCamera makeDefault position={CAMERA_POSITION} fov={34} />
@@ -597,6 +589,7 @@ function MissionWorld({
       {stage === 'generated' &&
         waypoints.map((waypoint) => {
           const isSelected = waypoint.id === selectedWaypointId
+          const actionCount = waypoint.actions.length
 
           return (
             <group
@@ -635,6 +628,24 @@ function MissionWorld({
                   {waypoint.id}
                 </Text>
               </Billboard>
+
+              {actionCount > 0 && (
+                <Billboard position={[5.5, 4.8, 0]} follow>
+                  <mesh>
+                    <planeGeometry args={[7.6, 4.2]} />
+                    <meshBasicMaterial color="#f97316" transparent opacity={0.98} />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={2.2}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    A{actionCount}
+                  </Text>
+                </Billboard>
+              )}
             </group>
           )
         })}

@@ -1,4 +1,11 @@
 import { create } from 'zustand'
+import {
+  createDefaultWaypointAction,
+  patchWaypointAction,
+  type MissionWaypointAction,
+  type MissionWaypointActionType,
+  type WaypointActionPatch,
+} from '../lib/waypointActions'
 
 export type OperationMode = 'simulation' | 'deployment'
 export type EditorTab = 'design' | 'code'
@@ -15,6 +22,7 @@ export interface MissionWaypoint {
   x: number
   y: number
   z: number
+  actions: MissionWaypointAction[]
 }
 
 interface MissionState {
@@ -44,6 +52,18 @@ interface MissionState {
   addPoint: (x: number, y: number) => void
   updatePoint: (id: number, x: number, y: number) => void
   selectWaypoint: (id: number | null) => void
+  addWaypointAction: (waypointId: number, type: MissionWaypointActionType) => void
+  updateWaypointAction: (
+    waypointId: number,
+    actionId: number,
+    patch: WaypointActionPatch,
+  ) => void
+  removeWaypointAction: (waypointId: number, actionId: number) => void
+  moveWaypointAction: (
+    waypointId: number,
+    actionId: number,
+    direction: 'up' | 'down',
+  ) => void
 }
 
 const DEFAULT_ALTITUDE = 50
@@ -83,7 +103,7 @@ export const useMissionStore = create<MissionState>((set) => ({
     set({
       stage: 'generated',
       waypoints,
-      selectedWaypointId: waypoints[0]?.id ?? null,
+      selectedWaypointId: null,
     }),
   editGeneratedPath: () =>
     set({
@@ -111,4 +131,80 @@ export const useMissionStore = create<MissionState>((set) => ({
       selectedWaypointId: null,
     })),
   selectWaypoint: (id) => set({ selectedWaypointId: id }),
+  addWaypointAction: (waypointId, type) =>
+    set((state) => ({
+      waypoints: state.waypoints.map((waypoint) => {
+        if (waypoint.id !== waypointId) {
+          return waypoint
+        }
+
+        const nextActionId =
+          waypoint.actions.reduce(
+            (highest, action) => Math.max(highest, action.id),
+            0,
+          ) + 1
+
+        return {
+          ...waypoint,
+          actions: [
+            ...waypoint.actions,
+            createDefaultWaypointAction(type, nextActionId),
+          ],
+        }
+      }),
+    })),
+  updateWaypointAction: (waypointId, actionId, patch) =>
+    set((state) => ({
+      waypoints: state.waypoints.map((waypoint) =>
+        waypoint.id === waypointId
+          ? {
+              ...waypoint,
+              actions: waypoint.actions.map((action) =>
+                action.id === actionId ? patchWaypointAction(action, patch) : action,
+              ),
+            }
+          : waypoint,
+      ),
+    })),
+  removeWaypointAction: (waypointId, actionId) =>
+    set((state) => ({
+      waypoints: state.waypoints.map((waypoint) =>
+        waypoint.id === waypointId
+          ? {
+              ...waypoint,
+              actions: waypoint.actions.filter((action) => action.id !== actionId),
+            }
+          : waypoint,
+      ),
+    })),
+  moveWaypointAction: (waypointId, actionId, direction) =>
+    set((state) => ({
+      waypoints: state.waypoints.map((waypoint) => {
+        if (waypoint.id !== waypointId) {
+          return waypoint
+        }
+
+        const currentIndex = waypoint.actions.findIndex((action) => action.id === actionId)
+
+        if (currentIndex === -1) {
+          return waypoint
+        }
+
+        const targetIndex =
+          direction === 'up' ? currentIndex - 1 : currentIndex + 1
+
+        if (targetIndex < 0 || targetIndex >= waypoint.actions.length) {
+          return waypoint
+        }
+
+        const nextActions = [...waypoint.actions]
+        const [movedAction] = nextActions.splice(currentIndex, 1)
+        nextActions.splice(targetIndex, 0, movedAction)
+
+        return {
+          ...waypoint,
+          actions: nextActions,
+        }
+      }),
+    })),
 }))

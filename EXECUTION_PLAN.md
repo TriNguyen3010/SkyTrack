@@ -7,7 +7,7 @@ Xây dựng `Drone Mission Planner` theo đúng:
 - UI reference từ các screenshot trong folder
 - Product logic, màu sắc, path modes và node actions từ `Drone_Mission_Planner_Plan.docx`
 
-Trọng tâm của execution plan này là hoàn thành 3 phase đầu với flow thật của người dùng:
+Trọng tâm của execution plan này là hoàn thành 4 phase đầu với flow thật của người dùng:
 
 1. `setup`
 2. `draw polygon`
@@ -36,7 +36,8 @@ Trọng tâm của execution plan này là hoàn thành 3 phase đầu với flo
 - Màu sắc và semantic states bám doc.
 - Chốt state model sớm để tránh refactor lớn ở Phase 2 và 3.
 - Mỗi phase phải ship được một flow dùng được, không làm UI rời logic.
-- `Coverage Area Scan` là backbone của Phase 1-3, các mode khác để sau.
+- `Coverage Area Scan` là backbone của Phase 1-3.
+- `Phase 4` mở rộng sang multi-mode, simulation và export theo doc gốc.
 
 ## 4. Tech baseline
 
@@ -161,6 +162,44 @@ Hoàn chỉnh generated mission state và nền tảng cho node actions.
 - Waypoint list và viewport sync hai chiều
 - Mission state đủ nền để thêm node actions ở phase sau
 
+### Phase 4: Node Actions + Advanced Modes / Outputs
+
+#### Mục tiêu
+
+Hoàn tất authoring behavior trên waypoint và mở rộng planner sang các mode nâng cao, simulation và export.
+
+#### UI scope
+
+- Waypoint detail panel với `actions`
+- Add / remove / reorder action
+- Dynamic action forms
+- Badge / icon action trên waypoint
+- Mode switcher cho `Perimeter`, `Waypoint`, `Orbit`, `Spiral`, `Grid`, `Corridor`
+- Playback controls cho simulation
+- Export actions cho `JSON`, `MAVLink`, `KML`
+
+#### Logic scope
+
+- Action schema cho waypoint
+- Mode registry cho từng path mode
+- Path generators cho `Perimeter`, `Waypoint`, `Orbit`, `Spiral`, `Grid`, `Corridor`
+- Simulation playback engine
+- Export adapters cho `JSON / MAVLink / KML`
+
+#### Deliverable
+
+- Có thể author mission với nhiều mode
+- Có thể gắn action cho waypoint
+- Có thể preview simulation và export mission
+
+#### Exit criteria
+
+- `Node Actions` hoạt động end-to-end
+- Có ít nhất `Perimeter`, `Waypoint`, `Orbit` chạy ổn
+- `Spiral`, `Grid`, `Corridor` generate được path hợp lệ
+- Export `JSON` chạy được, `MAVLink / KML` có adapter rõ ràng
+- Simulation playback đi qua được toàn bộ route
+
 ## 7. Work breakdown theo thời gian
 
 ### Tuần 1
@@ -206,6 +245,20 @@ Hoàn chỉnh generated mission state và nền tảng cho node actions.
 - Testing
 - Match screenshot 5
 
+### Tuần 7
+
+- Node actions data model
+- Waypoint action editor
+- Perimeter mode
+- Waypoint Navigation mode
+
+### Tuần 8
+
+- Orbit / POI mode
+- Spiral / Grid / Corridor
+- JSON export
+- Simulation playback foundation
+
 ## 8. Definition of Done
 
 - UI match screenshots theo từng state chính
@@ -216,14 +269,6 @@ Hoàn chỉnh generated mission state và nền tảng cho node actions.
 
 ## 9. Non-goals trong plan này
 
-- `Perimeter Scan`
-- `Waypoint Navigation`
-- `Spiral Scan`
-- `Grid Scan`
-- `Orbit / POI`
-- `Corridor Scan`
-- Full simulation engine
-- `MAVLink / KML` export
 - Responsive mobile
 - Dark theme
 
@@ -233,11 +278,12 @@ Execution plan này chốt:
 
 - UI reference chính là các screenshot trong folder
 - Product logic và màu sắc lấy từ `Drone_Mission_Planner_Plan.docx`
-- Phase 1-3 chỉ tập trung vào `Coverage Area Scan` flow
+- Phase 1-3 tập trung vào `Coverage Area Scan` flow
+- Phase 4 mở rộng sang `Node Actions`, multi-mode, simulation và export
 
-Sau khi hoàn thành Phase 1-3, codebase sẽ đủ nền để mở rộng sang:
+Sau khi hoàn thành Phase 1-4, codebase sẽ đủ nền để đi tiếp sang:
 
-- multi-mode path planning
-- node actions đầy đủ
-- simulation
-- export
+- polish UI
+- responsive
+- dark theme
+- testing sâu hơn

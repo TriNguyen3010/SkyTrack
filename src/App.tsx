@@ -1,22 +1,33 @@
 import {
+  Aperture,
+  ArrowDown,
+  ArrowUp,
+  Camera,
   ChevronDown,
   ChevronRight,
   ClipboardPlus,
   Code2,
+  Flame,
   FlaskConical,
   Hexagon,
   Home,
   Layers,
   LayoutGrid,
   MousePointer2,
+  MoveVertical,
+  Package,
   PencilLine,
   Plane,
   Play,
   Plus,
+  Radar,
   Rocket,
   RotateCcw,
   Route,
   ScanLine,
+  TimerReset,
+  Trash2,
+  Video,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { MissionViewport3D } from './components/MissionViewport3D'
@@ -32,6 +43,15 @@ import {
   type MissionPoint,
   type MissionWaypoint,
 } from './store/useMissionStore'
+import {
+  WAYPOINT_ACTION_OPTIONS,
+  getWaypointActionLabel,
+  summarizeWaypointAction,
+  validateWaypointAction,
+  type MissionWaypointAction,
+  type MissionWaypointActionType,
+  type WaypointActionPatch,
+} from './lib/waypointActions'
 import './App.css'
 
 const toolbarItems = [
@@ -73,7 +93,13 @@ function App() {
   const addPoint = useMissionStore((state) => state.addPoint)
   const updatePoint = useMissionStore((state) => state.updatePoint)
   const selectWaypoint = useMissionStore((state) => state.selectWaypoint)
+  const addWaypointAction = useMissionStore((state) => state.addWaypointAction)
+  const updateWaypointAction = useMissionStore((state) => state.updateWaypointAction)
+  const removeWaypointAction = useMissionStore((state) => state.removeWaypointAction)
+  const moveWaypointAction = useMissionStore((state) => state.moveWaypointAction)
   const [interactionNotice, setInteractionNotice] = useState<InteractionNotice | null>(null)
+  const [pendingActionType, setPendingActionType] =
+    useState<MissionWaypointActionType>('hover')
   const isPolygonValid = useMemo(
     () => points.length >= 3 && isSimplePolygon(points),
     [points],
@@ -94,6 +120,28 @@ function App() {
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
     [selectedWaypointId, waypoints],
+  )
+  const selectedActionOption = useMemo(
+    () =>
+      WAYPOINT_ACTION_OPTIONS.find((option) => option.type === pendingActionType) ??
+      WAYPOINT_ACTION_OPTIONS[0],
+    [pendingActionType],
+  )
+  const totalWaypointActions = useMemo(
+    () =>
+      waypoints.reduce((total, waypoint) => total + waypoint.actions.length, 0),
+    [waypoints],
+  )
+  const waypointsWithActions = useMemo(
+    () => waypoints.filter((waypoint) => waypoint.actions.length > 0).length,
+    [waypoints],
+  )
+  const selectedWaypointValidationMessages = useMemo(
+    () =>
+      selectedWaypoint
+        ? selectedWaypoint.actions.flatMap((action) => validateWaypointAction(action))
+        : [],
+    [selectedWaypoint],
   )
   const activeNotice =
     interactionNotice &&
@@ -497,14 +545,17 @@ function App() {
                   </div>
                   <p className="generated-summary-meta">
                     Alt: {scanAltitude}m · Spacing: {lineSpacing}m · {orientation}° ·{' '}
-                    {waypoints.length} pts · ~{Math.round(area)} m²
+                    {waypoints.length} pts · {waypointsWithActions} action nodes ·{' '}
+                    {totalWaypointActions} actions · ~
+                    {Math.round(area)} m²
                   </p>
                   {selectedWaypoint && (
                     <div className="selected-waypoint-summary">
                       Selected WP {selectedWaypoint.id} · X{' '}
                       {formatWaypointCoordinate(selectedWaypoint.x)} · Y{' '}
                       {formatWaypointCoordinate(selectedWaypoint.y)} · Z{' '}
-                      {formatWaypointCoordinate(selectedWaypoint.z)}m
+                      {formatWaypointCoordinate(selectedWaypoint.z)}m ·{' '}
+                      {selectedWaypoint.actions.length} actions
                     </div>
                   )}
                 </div>
@@ -541,7 +592,10 @@ function App() {
                   </div>
                   <div className="behavior-overview-copy">
                     <strong>Coverage Area Scan</strong>
-                    <span>{waypoints.length} waypoints</span>
+                    <span>
+                      {waypoints.length} waypoints · {waypointsWithActions} action nodes ·{' '}
+                      {totalWaypointActions} actions
+                    </span>
                   </div>
                 </div>
 
@@ -553,6 +607,24 @@ function App() {
                     onSelect={selectWaypoint}
                   />
                 ))}
+
+                {selectedWaypoint ? (
+                  <WaypointActionEditor
+                    waypoint={selectedWaypoint}
+                    validationMessages={selectedWaypointValidationMessages}
+                    pendingActionType={pendingActionType}
+                    selectedActionDescription={selectedActionOption.description}
+                    onPendingActionTypeChange={setPendingActionType}
+                    onAddAction={addWaypointAction}
+                    onUpdateAction={updateWaypointAction}
+                    onRemoveAction={removeWaypointAction}
+                    onMoveAction={moveWaypointAction}
+                  />
+                ) : (
+                  <div className="empty-action-state">
+                    Select a waypoint to configure node actions.
+                  </div>
+                )}
               </div>
             ) : (
               <button type="button" className="button behavior-button">
@@ -633,6 +705,8 @@ function WaypointBehaviorRow({
   isSelected: boolean
   onSelect: (id: number) => void
 }) {
+  const actionSummary = summarizeWaypointActionStack(waypoint.actions)
+
   return (
     <button
       type="button"
@@ -643,7 +717,16 @@ function WaypointBehaviorRow({
         <div className="waypoint-index">{waypoint.id}</div>
         <div className="waypoint-copy">
           <strong>Navigate to waypoint</strong>
-          <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
+          <div className="waypoint-row-meta">
+            <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
+            {waypoint.actions.length > 0 && (
+              <span className="waypoint-action-pill">
+                {waypoint.actions.length} action
+                {waypoint.actions.length > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          {actionSummary && <span className="waypoint-action-summary">{actionSummary}</span>}
         </div>
       </div>
 
@@ -653,6 +736,359 @@ function WaypointBehaviorRow({
         <CoordinatePill label="Location Z" value={formatWaypointCoordinate(waypoint.z)} />
       </div>
     </button>
+  )
+}
+
+function WaypointActionEditor({
+  waypoint,
+  validationMessages,
+  pendingActionType,
+  selectedActionDescription,
+  onPendingActionTypeChange,
+  onAddAction,
+  onUpdateAction,
+  onRemoveAction,
+  onMoveAction,
+}: {
+  waypoint: MissionWaypoint
+  validationMessages: string[]
+  pendingActionType: MissionWaypointActionType
+  selectedActionDescription: string
+  onPendingActionTypeChange: (type: MissionWaypointActionType) => void
+  onAddAction: (waypointId: number, type: MissionWaypointActionType) => void
+  onUpdateAction: (
+    waypointId: number,
+    actionId: number,
+    patch: WaypointActionPatch,
+  ) => void
+  onRemoveAction: (waypointId: number, actionId: number) => void
+  onMoveAction: (
+    waypointId: number,
+    actionId: number,
+    direction: 'up' | 'down',
+  ) => void
+}) {
+  return (
+    <div className="action-editor-card">
+      <div className="action-editor-header">
+        <div className="action-editor-copy">
+          <strong>Waypoint {waypoint.id} Actions</strong>
+          <span>Assign mission behaviors to this node.</span>
+        </div>
+        <div className="action-editor-count">
+          {waypoint.actions.length} action{waypoint.actions.length !== 1 ? 's' : ''}
+        </div>
+      </div>
+
+      <div className="action-add-block">
+        <label className="field-label" htmlFor="waypoint-action-type">
+          Add Action
+        </label>
+        <div className="action-add-row">
+          <select
+            id="waypoint-action-type"
+            className="action-select"
+            value={pendingActionType}
+            onChange={(event) =>
+              onPendingActionTypeChange(event.target.value as MissionWaypointActionType)
+            }
+          >
+            {WAYPOINT_ACTION_OPTIONS.map((option) => (
+              <option key={option.type} value={option.type}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="button button-primary-small"
+            onClick={() => onAddAction(waypoint.id, pendingActionType)}
+          >
+            <Plus size={14} strokeWidth={2.2} />
+            Add
+          </button>
+        </div>
+        <p className="action-add-help">{selectedActionDescription}</p>
+      </div>
+
+      <div
+        className={`action-status-card ${
+          validationMessages.length > 0 ? 'is-warning' : 'is-ready'
+        }`}
+      >
+        <span className="action-status-dot" />
+        <div className="action-status-copy">
+          <strong>
+            {validationMessages.length > 0
+              ? 'Action config needs attention'
+              : 'Action config ready'}
+          </strong>
+          <span>
+            {validationMessages.length > 0
+              ? validationMessages[0]
+              : waypoint.actions.length > 0
+                ? 'Selected waypoint is safe to carry into simulation and export flows later.'
+                : 'Add actions here when this waypoint needs mission behavior.'}
+          </span>
+        </div>
+      </div>
+
+      {waypoint.actions.length > 0 ? (
+        <div className="action-list">
+          {waypoint.actions.map((action, index) => (
+            <WaypointActionCard
+              key={action.id}
+              waypointId={waypoint.id}
+              action={action}
+              index={index}
+              total={waypoint.actions.length}
+              onUpdateAction={onUpdateAction}
+              onRemoveAction={onRemoveAction}
+              onMoveAction={onMoveAction}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-action-state is-inline">
+          No actions yet. Add one to turn this waypoint into an execution node.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WaypointActionCard({
+  waypointId,
+  action,
+  index,
+  total,
+  onUpdateAction,
+  onRemoveAction,
+  onMoveAction,
+}: {
+  waypointId: number
+  action: MissionWaypointAction
+  index: number
+  total: number
+  onUpdateAction: (
+    waypointId: number,
+    actionId: number,
+    patch: WaypointActionPatch,
+  ) => void
+  onRemoveAction: (waypointId: number, actionId: number) => void
+  onMoveAction: (
+    waypointId: number,
+    actionId: number,
+    direction: 'up' | 'down',
+  ) => void
+}) {
+  return (
+    <div className="waypoint-action-card">
+      <div className="waypoint-action-top">
+        <div className="waypoint-action-heading">
+          <div className="waypoint-action-index">{index + 1}</div>
+          <div className="waypoint-action-copy">
+            <strong>
+              {renderWaypointActionIcon(action.type)}
+              {getWaypointActionLabel(action.type)}
+            </strong>
+            <span>{summarizeWaypointAction(action)}</span>
+          </div>
+        </div>
+
+        <div className="waypoint-action-controls">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => onMoveAction(waypointId, action.id, 'up')}
+            disabled={index === 0}
+            aria-label="Move action up"
+          >
+            <ArrowUp size={14} strokeWidth={2.2} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => onMoveAction(waypointId, action.id, 'down')}
+            disabled={index === total - 1}
+            aria-label="Move action down"
+          >
+            <ArrowDown size={14} strokeWidth={2.2} />
+          </button>
+          <button
+            type="button"
+            className="icon-button is-danger"
+            onClick={() => onRemoveAction(waypointId, action.id)}
+            aria-label="Remove action"
+          >
+            <Trash2 size={14} strokeWidth={2.2} />
+          </button>
+        </div>
+      </div>
+
+      <div className="waypoint-action-fields">
+        {action.type === 'hover' && (
+          <ActionNumberField
+            label="Duration"
+            value={action.config.durationSec}
+            suffix="sec"
+            min={1}
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { durationSec: value })
+            }
+          />
+        )}
+
+        {action.type === 'take_photo' && (
+          <ActionNumberField
+            label="Burst Count"
+            value={action.config.burstCount}
+            min={1}
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { burstCount: value })
+            }
+          />
+        )}
+
+        {action.type === 'record_video' && (
+          <ActionNumberField
+            label="Duration"
+            value={action.config.durationSec}
+            suffix="sec"
+            min={1}
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { durationSec: value })
+            }
+          />
+        )}
+
+        {action.type === 'drop_payload' && (
+          <ActionTextField
+            label="Payload Type"
+            value={action.config.payloadType}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { payloadType: value })
+            }
+          />
+        )}
+
+        {action.type === 'fire_suppress' && (
+          <ActionNumberField
+            label="Duration"
+            value={action.config.durationSec}
+            suffix="sec"
+            min={1}
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { durationSec: value })
+            }
+          />
+        )}
+
+        {action.type === 'change_altitude' && (
+          <ActionNumberField
+            label="Altitude Delta"
+            value={action.config.altitudeDelta}
+            suffix="m"
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { altitudeDelta: value })
+            }
+          />
+        )}
+
+        {action.type === 'set_gimbal' && (
+          <ActionNumberField
+            label="Pitch"
+            value={action.config.pitch}
+            suffix="deg"
+            min={-90}
+            max={30}
+            step={1}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { pitch: value })
+            }
+          />
+        )}
+
+        {action.type === 'trigger_sensor' && (
+          <ActionTextField
+            label="Sensor Name"
+            value={action.config.sensorName}
+            onChange={(value) =>
+              onUpdateAction(waypointId, action.id, { sensorName: value })
+            }
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ActionNumberField({
+  label,
+  value,
+  onChange,
+  suffix,
+  min,
+  max,
+  step,
+}: {
+  label: string
+  value: number
+  onChange: (value: number) => void
+  suffix?: string
+  min?: number
+  max?: number
+  step?: number
+}) {
+  return (
+    <label className="action-field">
+      <span className="action-field-label">{label}</span>
+      <div className="action-input-wrap">
+        <input
+          className="action-input"
+          type="number"
+          value={value}
+          min={min}
+          max={max}
+          step={step ?? 1}
+          onChange={(event) => {
+            const nextValue = Number(event.target.value)
+
+            if (!Number.isNaN(nextValue)) {
+              onChange(nextValue)
+            }
+          }}
+        />
+        {suffix && <span className="action-input-suffix">{suffix}</span>}
+      </div>
+    </label>
+  )
+}
+
+function ActionTextField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="action-field">
+      <span className="action-field-label">{label}</span>
+      <input
+        className="action-input"
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
   )
 }
 
@@ -671,6 +1107,41 @@ function formatCoordinate(value: number): string {
 
 function formatWaypointCoordinate(value: number): string {
   return value.toFixed(2)
+}
+
+function summarizeWaypointActionStack(actions: MissionWaypointAction[]): string | null {
+  if (actions.length === 0) {
+    return null
+  }
+
+  const firstAction = summarizeWaypointAction(actions[0])
+
+  if (actions.length === 1) {
+    return firstAction
+  }
+
+  return `${firstAction} +${actions.length - 1} more`
+}
+
+function renderWaypointActionIcon(type: MissionWaypointActionType) {
+  switch (type) {
+    case 'hover':
+      return <TimerReset size={15} strokeWidth={2.1} />
+    case 'take_photo':
+      return <Camera size={15} strokeWidth={2.1} />
+    case 'record_video':
+      return <Video size={15} strokeWidth={2.1} />
+    case 'drop_payload':
+      return <Package size={15} strokeWidth={2.1} />
+    case 'fire_suppress':
+      return <Flame size={15} strokeWidth={2.1} />
+    case 'change_altitude':
+      return <MoveVertical size={15} strokeWidth={2.1} />
+    case 'set_gimbal':
+      return <Aperture size={15} strokeWidth={2.1} />
+    case 'trigger_sensor':
+      return <Radar size={15} strokeWidth={2.1} />
+  }
 }
 
 export default App

@@ -294,6 +294,7 @@ export function generateCoverageWaypoints(
         x: Math.round(point.x * 100) / 100,
         y: Math.round(point.y * 100) / 100,
         z: altitude,
+        actions: [],
       })
     })
   })
