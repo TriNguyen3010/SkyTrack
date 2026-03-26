@@ -172,16 +172,22 @@ Status: implemented, build/lint passed. Manual browser verification is still rec
 - Mở khóa sau khi reveal xong
 - Recenter nhẹ khi chọn waypoint
 
-#### Deferred in this stream
+#### Deferred items moved out of core flow
+
+Các mục dưới đây không còn theo dõi trong file implementation core nữa:
 
 - `path trace animation`
 - quick-view presets
 - altitude toggle auto-shift
 
-Lý do:
+Nơi theo dõi mới:
 
-- Đây là phần đẹp hơn là phần lõi
-- Có thể làm sau khi reveal ổn định
+- [2026-03-27-close-path-deferred-backlog.md](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/plans/2026-03-27-close-path-deferred-backlog.md)
+
+Lý do tách:
+
+- Đây là phần enhancement, không còn chặn core flow
+- Core flow của spec cần gọn để dễ verify và chốt chất lượng
 
 #### Acceptance criteria
 
@@ -270,5 +276,5 @@ Và thêm UI state riêng:
 - [x] Workstream B: Pattern Picker Popup
 - [x] Workstream C: Camera During Drawing
 - [x] Workstream D: Camera After Generate
-- [ ] Tách phần deferred ra khỏi core flow
+- [x] Tách phần deferred ra khỏi core flow
 - [ ] Dùng file này làm nguồn đối chiếu khi implement spec

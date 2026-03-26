@@ -1,10 +1,12 @@
 .app-shell {
   display: flex;
+  height: 100vh;
   min-height: 100vh;
   flex-direction: column;
   gap: 10px;
   padding: 6px 10px 10px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .topbar {
@@ -87,18 +89,21 @@
   gap: 12px;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .viewport-panel {
-  min-height: 680px;
+  min-height: 0;
+  height: 100%;
+  display: flex;
   overflow: hidden;
   border-radius: 0 0 14px 14px;
 }
 
 .viewport-stage {
   position: relative;
-  height: 100%;
-  min-height: 680px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background: linear-gradient(180deg, #c9d4e4 0%, #d6e0ec 100%);
 }
@@ -521,6 +526,10 @@
   flex-direction: column;
   gap: 14px;
   padding-top: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .action-row,

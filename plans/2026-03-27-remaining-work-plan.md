@@ -125,6 +125,11 @@ Mở rộng planner sang advanced modes, simulation và export.
 - testing sâu hơn
 - deploy pipeline
 
+Ghi chú:
+
+- Các enhancement deferred của spec close-path / generated camera không còn theo dõi trong core flow.
+- Xem backlog riêng tại [2026-03-27-close-path-deferred-backlog.md](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/plans/2026-03-27-close-path-deferred-backlog.md)
+
 #### Done khi
 
 - UI không chỉ là shell mà có behavior đúng
