@@ -30,17 +30,25 @@ import {
   Trash2,
   Video,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { MissionViewport3D } from './components/MissionViewport3D'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  MissionViewport3D,
+  type ViewportAnimationState,
+} from './components/MissionViewport3D'
 import {
   buildFlightPatternMission,
+  clampPatternParams,
+  createInitialPatternParams,
   FLIGHT_PATTERN_OPTIONS,
   getFlightPatternDefinition,
   getFlightPatternOption,
   type FlightPatternMissionMeta,
   type FlightPatternId,
+  type OrbitPatternParams,
+  type PatternParamsMap,
 } from './lib/flightPatterns'
 import {
+  WORLD_BOUNDS,
   canAppendPointToOpenPath,
   isSimplePolygon,
   polygonArea,
@@ -115,11 +123,22 @@ function App() {
     useState<MissionWaypointActionType>('hover')
   const [selectedPattern, setSelectedPattern] =
     useState<FlightPatternId>('coverage')
+  const [patternParamsByPattern, setPatternParamsByPattern] =
+    useState<PatternParamsMap>(() =>
+      createInitialPatternParams({
+        scanAltitude,
+        lineSpacing,
+        orientation,
+      }),
+    )
   const [hoveredPattern, setHoveredPattern] = useState<FlightPatternId | null>(null)
   const [patternPickerVisible, setPatternPickerVisible] = useState(false)
   const [patternPickerAnchor, setPatternPickerAnchor] = useState<OverlayAnchor | null>(
     null,
   )
+  const [viewportAnimationState, setViewportAnimationState] =
+    useState<ViewportAnimationState>('settled')
+  const [skipAnimationToken, setSkipAnimationToken] = useState(0)
   const [viewportStageSize, setViewportStageSize] = useState({
     width: 0,
     height: 0,
@@ -141,14 +160,19 @@ function App() {
     [points],
   )
   const activePreviewPattern = hoveredPattern ?? selectedPattern
+  const activePatternParams = patternParamsByPattern[selectedPattern]
+  const coverageParams = patternParamsByPattern.coverage
+  const perimeterParams = patternParamsByPattern.perimeter
+  const orbitParams = patternParamsByPattern.orbit
+  const spiralParams = patternParamsByPattern.spiral
+  const gridParams = patternParamsByPattern.grid
+  const corridorParams = patternParamsByPattern.corridor
   const patternGenerationContext = useMemo(
     () => ({
       points,
-      scanAltitude,
-      lineSpacing,
-      orientation,
+      paramsByPattern: patternParamsByPattern,
     }),
-    [lineSpacing, orientation, points, scanAltitude],
+    [patternParamsByPattern, points],
   )
   const activePreviewMission = useMemo(
     () =>
@@ -214,6 +238,10 @@ function App() {
 
     setPatternPickerVisible(false)
     setHoveredPattern(null)
+  }
+
+  function requestSkipAnimation() {
+    setSkipAnimationToken((current) => current + 1)
   }
 
   function schedulePatternPickerOpen() {
@@ -295,8 +323,100 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (viewportAnimationState !== 'animating') {
+      return undefined
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.code !== 'Space') {
+        return
+      }
+
+      event.preventDefault()
+      requestSkipAnimation()
+    }
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true })
+    }
+  }, [viewportAnimationState])
+
+  useEffect(() => {
+    if (scanAltitude !== activePatternParams.scanAltitude) {
+      setScanAltitude(activePatternParams.scanAltitude)
+    }
+
+    if (
+      (selectedPattern === 'coverage' || selectedPattern === 'grid') &&
+      'lineSpacing' in activePatternParams &&
+      lineSpacing !== activePatternParams.lineSpacing
+    ) {
+      setLineSpacing(activePatternParams.lineSpacing)
+    }
+
+    if (
+      (selectedPattern === 'coverage' || selectedPattern === 'grid') &&
+      'orientation' in activePatternParams &&
+      orientation !== activePatternParams.orientation
+    ) {
+      setOrientation(activePatternParams.orientation)
+    }
+  }, [
+    activePatternParams,
+    lineSpacing,
+    orientation,
+    scanAltitude,
+    selectedPattern,
+    setLineSpacing,
+    setOrientation,
+    setScanAltitude,
+  ])
+
   function clearInteractionNotice() {
     setInteractionNotice(null)
+  }
+
+  function updatePatternParams<K extends FlightPatternId>(
+    patternId: K,
+    patch: Partial<PatternParamsMap[K]>,
+  ) {
+    setPatternParamsByPattern((current) => {
+      const nextParams = clampPatternParams(patternId, {
+        ...current[patternId],
+        ...patch,
+      } as PatternParamsMap[K])
+
+      return {
+        ...current,
+        [patternId]: nextParams,
+      }
+    })
+  }
+
+  function updateSelectedPatternScanAltitude(value: number) {
+    switch (selectedPattern) {
+      case 'coverage':
+        updatePatternParams('coverage', { scanAltitude: value })
+        break
+      case 'perimeter':
+        updatePatternParams('perimeter', { scanAltitude: value })
+        break
+      case 'orbit':
+        updatePatternParams('orbit', { scanAltitude: value })
+        break
+      case 'spiral':
+        updatePatternParams('spiral', { scanAltitude: value })
+        break
+      case 'grid':
+        updatePatternParams('grid', { scanAltitude: value })
+        break
+      case 'corridor':
+        updatePatternParams('corridor', { scanAltitude: value })
+        break
+    }
   }
 
   function handleAddPoint(x: number, y: number) {
@@ -353,7 +473,7 @@ function App() {
     if (!isPolygonValid || generatedWaypoints.length === 0) {
       setInteractionNotice({
         tone: 'warning',
-        message: 'Coverage path is only available after the polygon boundary is valid.',
+        message: 'Mission path is only available after the polygon boundary is valid.',
       })
       return
     }
@@ -366,6 +486,7 @@ function App() {
     dismissPatternPicker()
     clearInteractionNotice()
     setSelectedPattern('coverage')
+    setPatternParamsByPattern(createInitialPatternParams())
     setPatternPickerAnchor(null)
     resetMission()
   }
@@ -393,7 +514,9 @@ function App() {
 
   const viewportHint = activeNotice?.message
     ? activeNotice.message
-    : stage === 'setup'
+    : viewportAnimationState === 'animating'
+      ? 'Animating path preview · click or press Space to skip'
+      : stage === 'setup'
       ? 'Tap highlighted altitude plane to place first point'
       : stage === 'drawing'
         ? stage === 'drawing' && isReadyToClose
@@ -480,6 +603,7 @@ function App() {
               selectedPattern={selectedPattern}
               hoveredPattern={hoveredPattern}
               patternPickerVisible={patternPickerVisible}
+              skipAnimationToken={skipAnimationToken}
               onStartDrawing={startDrawing}
               onAddPoint={handleAddPoint}
               onUpdatePoint={handleUpdatePoint}
@@ -487,7 +611,21 @@ function App() {
               onSelectWaypoint={selectWaypoint}
               onReadyToCloseChange={setIsReadyToClose}
               onPatternPickerAnchorChange={setPatternPickerAnchor}
+              onAnimationStateChange={setViewportAnimationState}
             />
+
+            {viewportAnimationState === 'animating' && (
+              <button
+                type="button"
+                className="viewport-skip-overlay"
+                onClick={requestSkipAnimation}
+              >
+                <span className="viewport-skip-chip">
+                  Skip animation
+                  <small>Click anywhere or press Space</small>
+                </span>
+              </button>
+            )}
 
             {patternPickerVisible && patternPickerPosition && (
               <div
@@ -742,11 +880,11 @@ function App() {
                   id="phase2-altitude"
                   label="Scan Altitude"
                   min={20}
-                  max={120}
+                  max={200}
                   step={1}
-                  value={scanAltitude}
-                  valueLabel={`${scanAltitude}m`}
-                  onChange={setScanAltitude}
+                  value={activePatternParams.scanAltitude}
+                  valueLabel={`${activePatternParams.scanAltitude}m`}
+                  onChange={updateSelectedPatternScanAltitude}
                 />
 
                 {selectedPattern === 'coverage' ? (
@@ -754,33 +892,319 @@ function App() {
                     <SliderField
                       id="phase2-spacing"
                       label="Line Spacing"
-                      min={6}
-                      max={30}
+                      min={5}
+                      max={50}
                       step={1}
-                      value={lineSpacing}
-                      valueLabel={`${lineSpacing}m`}
-                      onChange={setLineSpacing}
+                      value={coverageParams.lineSpacing}
+                      valueLabel={`${coverageParams.lineSpacing}m`}
+                      onChange={(value) =>
+                        updatePatternParams('coverage', { lineSpacing: value })
+                      }
                     />
 
                     <SliderField
                       id="phase2-orientation"
                       label="Orientation"
-                      min={-90}
-                      max={90}
+                      min={-180}
+                      max={180}
                       step={1}
-                      value={orientation}
-                      valueLabel={`${orientation}°`}
-                      onChange={setOrientation}
+                      value={coverageParams.orientation}
+                      valueLabel={`${coverageParams.orientation}°`}
+                      onChange={(value) =>
+                        updatePatternParams('coverage', { orientation: value })
+                      }
                     />
                   </>
-                ) : selectedPatternOption.implemented ? (
-                  <div className="pattern-preview-card">
-                    <div className="pattern-preview-header">
-                      <ScanSearch size={16} strokeWidth={2.2} />
-                      <span>{selectedPatternOption.label} Defaults</span>
-                    </div>
-                    <p>{getImplementedPatternDefaultsCopy(selectedPattern)}</p>
-                  </div>
+                ) : selectedPattern === 'perimeter' ? (
+                  <>
+                    <SliderField
+                      id="perimeter-inset"
+                      label="Inset Distance"
+                      min={0}
+                      max={30}
+                      step={1}
+                      value={perimeterParams.insetDistance}
+                      valueLabel={`${perimeterParams.insetDistance}m`}
+                      onChange={(value) =>
+                        updatePatternParams('perimeter', { insetDistance: value })
+                      }
+                    />
+
+                    <SliderField
+                      id="perimeter-loops"
+                      label="Loops"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={perimeterParams.loops}
+                      valueLabel={`${perimeterParams.loops}`}
+                      onChange={(value) =>
+                        updatePatternParams('perimeter', { loops: value })
+                      }
+                    />
+
+                    <SelectField
+                      label="Direction"
+                      value={perimeterParams.direction}
+                      onChange={(value) =>
+                        updatePatternParams('perimeter', {
+                          direction: value as 'cw' | 'ccw',
+                        })
+                      }
+                      options={[
+                        { value: 'cw', label: 'Clockwise' },
+                        { value: 'ccw', label: 'Counter-clockwise' },
+                      ]}
+                    />
+                  </>
+                ) : selectedPattern === 'orbit' ? (
+                  <>
+                    <SelectField
+                      label="Center Mode"
+                      value={orbitParams.centerMode}
+                      onChange={(value) =>
+                        updatePatternParams('orbit', {
+                          centerMode: value as OrbitPatternParams['centerMode'],
+                        })
+                      }
+                      options={[
+                        { value: 'auto', label: 'Auto centroid' },
+                        { value: 'manual', label: 'Manual X / Y' },
+                      ]}
+                    />
+
+                    {orbitParams.centerMode === 'manual' && (
+                      <PatternFieldGrid>
+                        <NumberField
+                          label="Center X"
+                          value={orbitParams.manualCenter.x}
+                          min={WORLD_BOUNDS.minX}
+                          max={WORLD_BOUNDS.maxX}
+                          step={1}
+                          suffix="m"
+                          onChange={(value) =>
+                            updatePatternParams('orbit', {
+                              manualCenter: {
+                                ...orbitParams.manualCenter,
+                                x: value,
+                              },
+                            })
+                          }
+                        />
+                        <NumberField
+                          label="Center Y"
+                          value={orbitParams.manualCenter.y}
+                          min={WORLD_BOUNDS.minY}
+                          max={WORLD_BOUNDS.maxY}
+                          step={1}
+                          suffix="m"
+                          onChange={(value) =>
+                            updatePatternParams('orbit', {
+                              manualCenter: {
+                                ...orbitParams.manualCenter,
+                                y: value,
+                              },
+                            })
+                          }
+                        />
+                      </PatternFieldGrid>
+                    )}
+
+                    <SelectField
+                      label="Radius Mode"
+                      value={orbitParams.radiusMode}
+                      onChange={(value) =>
+                        updatePatternParams('orbit', {
+                          radiusMode: value as OrbitPatternParams['radiusMode'],
+                        })
+                      }
+                      options={[
+                        { value: 'auto-fit', label: 'Auto-fit polygon' },
+                        { value: 'manual', label: 'Manual radius' },
+                      ]}
+                    />
+
+                    {orbitParams.radiusMode === 'manual' && (
+                      <SliderField
+                        id="orbit-radius"
+                        label="Radius"
+                        min={10}
+                        max={200}
+                        step={1}
+                        value={orbitParams.radius}
+                        valueLabel={`${orbitParams.radius}m`}
+                        onChange={(value) =>
+                          updatePatternParams('orbit', { radius: value })
+                        }
+                      />
+                    )}
+
+                    <SliderField
+                      id="orbit-waypoints"
+                      label="Waypoint Count"
+                      min={8}
+                      max={72}
+                      step={1}
+                      value={orbitParams.waypointCount}
+                      valueLabel={`${orbitParams.waypointCount}`}
+                      onChange={(value) =>
+                        updatePatternParams('orbit', { waypointCount: value })
+                      }
+                    />
+
+                    <SliderField
+                      id="orbit-loops"
+                      label="Loops"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={orbitParams.loops}
+                      valueLabel={`${orbitParams.loops}`}
+                      onChange={(value) =>
+                        updatePatternParams('orbit', { loops: value })
+                      }
+                    />
+
+                    <SelectField
+                      label="Direction"
+                      value={orbitParams.direction}
+                      onChange={(value) =>
+                        updatePatternParams('orbit', {
+                          direction: value as 'cw' | 'ccw',
+                        })
+                      }
+                      options={[
+                        { value: 'cw', label: 'Clockwise' },
+                        { value: 'ccw', label: 'Counter-clockwise' },
+                      ]}
+                    />
+                  </>
+                ) : selectedPattern === 'grid' ? (
+                  <>
+                    <SliderField
+                      id="grid-spacing"
+                      label="Line Spacing"
+                      min={5}
+                      max={50}
+                      step={1}
+                      value={gridParams.lineSpacing}
+                      valueLabel={`${gridParams.lineSpacing}m`}
+                      onChange={(value) =>
+                        updatePatternParams('grid', { lineSpacing: value })
+                      }
+                    />
+
+                    <SliderField
+                      id="grid-orientation"
+                      label="Orientation"
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={gridParams.orientation}
+                      valueLabel={`${gridParams.orientation}°`}
+                      onChange={(value) =>
+                        updatePatternParams('grid', { orientation: value })
+                      }
+                    />
+
+                    <SliderField
+                      id="grid-cross-angle"
+                      label="Cross Angle"
+                      min={45}
+                      max={135}
+                      step={1}
+                      value={gridParams.crossAngle}
+                      valueLabel={`${gridParams.crossAngle}°`}
+                      onChange={(value) =>
+                        updatePatternParams('grid', { crossAngle: value })
+                      }
+                    />
+                  </>
+                ) : selectedPattern === 'corridor' ? (
+                  <>
+                    <SliderField
+                      id="corridor-passes"
+                      label="Passes"
+                      min={1}
+                      max={5}
+                      step={1}
+                      value={corridorParams.passes}
+                      valueLabel={`${corridorParams.passes}`}
+                      onChange={(value) =>
+                        updatePatternParams('corridor', { passes: value })
+                      }
+                    />
+
+                    <SliderField
+                      id="corridor-pass-spacing"
+                      label="Pass Spacing"
+                      min={5}
+                      max={30}
+                      step={1}
+                      value={corridorParams.passSpacing}
+                      valueLabel={`${corridorParams.passSpacing}m`}
+                      onChange={(value) =>
+                        updatePatternParams('corridor', { passSpacing: value })
+                      }
+                    />
+
+                    <SelectField
+                      label="Direction"
+                      value={corridorParams.direction}
+                      onChange={(value) =>
+                        updatePatternParams('corridor', {
+                          direction: value as 'auto' | 'reverse',
+                        })
+                      }
+                      options={[
+                        { value: 'auto', label: 'Auto' },
+                        { value: 'reverse', label: 'Reverse' },
+                      ]}
+                    />
+                  </>
+                ) : selectedPattern === 'spiral' ? (
+                  <>
+                    <SliderField
+                      id="spiral-arm-spacing"
+                      label="Arm Spacing"
+                      min={5}
+                      max={40}
+                      step={1}
+                      value={spiralParams.armSpacing}
+                      valueLabel={`${spiralParams.armSpacing}m`}
+                      onChange={(value) =>
+                        updatePatternParams('spiral', { armSpacing: value })
+                      }
+                    />
+
+                    <SelectField
+                      label="Spiral Direction"
+                      value={spiralParams.spiralDirection}
+                      onChange={(value) =>
+                        updatePatternParams('spiral', {
+                          spiralDirection: value as 'inward' | 'outward',
+                        })
+                      }
+                      options={[
+                        { value: 'inward', label: 'Inward' },
+                        { value: 'outward', label: 'Outward' },
+                      ]}
+                    />
+
+                    <SelectField
+                      label="Rotation Direction"
+                      value={spiralParams.rotationDirection}
+                      onChange={(value) =>
+                        updatePatternParams('spiral', {
+                          rotationDirection: value as 'cw' | 'ccw',
+                        })
+                      }
+                      options={[
+                        { value: 'cw', label: 'Clockwise' },
+                        { value: 'ccw', label: 'Counter-clockwise' },
+                      ]}
+                    />
+                  </>
                 ) : (
                   <div className="pattern-preview-card">
                     <div className="pattern-preview-header">
@@ -976,6 +1400,75 @@ function SliderField({
         <div className="slider-value">{valueLabel}</div>
       </div>
     </div>
+  )
+}
+
+function PatternFieldGrid({ children }: { children: ReactNode }) {
+  return <div className="pattern-field-grid">{children}</div>
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: Array<{ value: string; label: string }>
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="action-field">
+      <span className="action-field-label">{label}</span>
+      <select
+        className="action-select"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  suffix?: string
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="action-field">
+      <span className="action-field-label">{label}</span>
+      <div className="action-input-wrap">
+        <input
+          className="action-input"
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        {suffix && <span className="action-input-suffix">{suffix}</span>}
+      </div>
+    </label>
   )
 }
 
@@ -1470,24 +1963,11 @@ function formatPatternGeneratedMeta({
     case 'orbit':
       return `Alt: ${scanAltitude}m · Auto center · Auto-fit radius · ${meta?.loops ?? 1} loop · ${meta?.direction ?? 'CW'} · ${sharedTail}`
     case 'spiral':
+      return `Alt: ${scanAltitude}m · Inward spiral · ${meta?.direction ?? 'INWARD CW'} · ${sharedTail}`
     case 'grid':
+      return `Alt: ${scanAltitude}m · Spacing: ${lineSpacing}m · ${orientation}° + 90° · ${meta?.direction ?? 'cross-hatch'} · ${sharedTail}`
     case 'corridor':
-      return `Alt: ${scanAltitude}m · ${sharedTail}`
-  }
-}
-
-function getImplementedPatternDefaultsCopy(patternId: FlightPatternId): string {
-  switch (patternId) {
-    case 'coverage':
-      return 'Coverage generation is active with the current spacing, orientation, and altitude settings.'
-    case 'perimeter':
-      return 'Boundary-following generation is active. This pass uses the current altitude with a single clockwise loop. Advanced perimeter controls land in the next params stream.'
-    case 'orbit':
-      return 'Orbit generation is active with auto center and auto-fit radius. This pass uses a single clockwise loop with the current altitude. Manual center and orbit controls land in the next params stream.'
-    case 'spiral':
-    case 'grid':
-    case 'corridor':
-      return 'This implemented pattern is using its current default mission settings. Advanced controls land in the next params stream.'
+      return `Alt: ${scanAltitude}m · Center corridor · ${meta?.direction ?? 'AUTO'} · ${sharedTail}`
   }
 }
 

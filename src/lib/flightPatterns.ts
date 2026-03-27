@@ -6,6 +6,8 @@ import {
 } from './missionGeometry'
 import type { MissionPoint, MissionWaypoint } from '../store/useMissionStore'
 
+type XYPoint = Pick<MissionPoint, 'x' | 'y'>
+
 export type FlightPatternId =
   | 'coverage'
   | 'perimeter'
@@ -29,6 +31,7 @@ export interface PerimeterPatternParams {
 
 export interface OrbitPatternParams {
   centerMode: 'auto' | 'manual'
+  manualCenter: Vec2
   radiusMode: 'auto-fit' | 'manual'
   radius: number
   waypointCount: number
@@ -94,9 +97,7 @@ export interface FlightPatternMissionResult {
 
 export interface FlightPatternBuildContext {
   points: MissionPoint[]
-  scanAltitude: number
-  lineSpacing: number
-  orientation: number
+  paramsByPattern: PatternParamsMap
 }
 
 export interface FlightPatternDefinition extends FlightPatternOption {
@@ -145,6 +146,7 @@ const FLIGHT_PATTERN_REGISTRY: Record<FlightPatternId, FlightPatternDefinition> 
     implemented: true,
     defaultParams: {
       centerMode: 'auto',
+      manualCenter: { x: 0, y: 0 },
       radiusMode: 'auto-fit',
       radius: 40,
       waypointCount: 24,
@@ -160,13 +162,14 @@ const FLIGHT_PATTERN_REGISTRY: Record<FlightPatternId, FlightPatternDefinition> 
     shortLabel: 'Spiral Scan',
     description: 'Sweep inward with a spiral path from the boundary.',
     color: '#10b981',
-    implemented: false,
+    implemented: true,
     defaultParams: {
       spiralDirection: 'inward',
       armSpacing: 12,
       rotationDirection: 'cw',
       scanAltitude: 40,
     },
+    generateMission: generateSpiralMission,
   },
   grid: {
     id: 'grid',
@@ -174,13 +177,14 @@ const FLIGHT_PATTERN_REGISTRY: Record<FlightPatternId, FlightPatternDefinition> 
     shortLabel: 'Grid Scan',
     description: 'Cross-hatch the area with an orthogonal grid.',
     color: '#ec4899',
-    implemented: false,
+    implemented: true,
     defaultParams: {
       lineSpacing: 10,
       orientation: 0,
       crossAngle: 90,
       scanAltitude: 40,
     },
+    generateMission: generateGridMission,
   },
   corridor: {
     id: 'corridor',
@@ -188,13 +192,14 @@ const FLIGHT_PATTERN_REGISTRY: Record<FlightPatternId, FlightPatternDefinition> 
     shortLabel: 'Corridor Scan',
     description: 'Run a centered corridor-style flight path.',
     color: '#06b6d4',
-    implemented: false,
+    implemented: true,
     defaultParams: {
       passes: 1,
       passSpacing: 10,
       direction: 'auto',
       scanAltitude: 40,
     },
+    generateMission: generateCorridorMission,
   },
 }
 
@@ -227,12 +232,136 @@ export function buildFlightPatternMission(
   return pattern.generateMission(context)
 }
 
+export function createInitialPatternParams(seed?: {
+  scanAltitude?: number
+  lineSpacing?: number
+  orientation?: number
+}): PatternParamsMap {
+  const scanAltitude = seed?.scanAltitude ?? 50
+  const lineSpacing = seed?.lineSpacing ?? 10
+  const orientation = seed?.orientation ?? 0
+
+  return {
+    coverage: {
+      scanAltitude,
+      lineSpacing,
+      orientation,
+    },
+    perimeter: {
+      scanAltitude,
+      insetDistance: 0,
+      loops: 1,
+      direction: 'cw',
+    },
+    orbit: {
+      scanAltitude,
+      centerMode: 'auto',
+      manualCenter: { x: 0, y: 0 },
+      radiusMode: 'auto-fit',
+      radius: 40,
+      waypointCount: 24,
+      loops: 1,
+      direction: 'cw',
+    },
+    spiral: {
+      scanAltitude,
+      spiralDirection: 'inward',
+      armSpacing: 12,
+      rotationDirection: 'cw',
+    },
+    grid: {
+      scanAltitude,
+      lineSpacing,
+      orientation,
+      crossAngle: 90,
+    },
+    corridor: {
+      scanAltitude,
+      passes: 1,
+      passSpacing: 10,
+      direction: 'auto',
+    },
+  }
+}
+
+export function clampPatternParams<K extends FlightPatternId>(
+  patternId: K,
+  params: PatternParamsMap[K],
+): PatternParamsMap[K] {
+  switch (patternId) {
+    case 'coverage': {
+      const coverageParams = params as CoveragePatternParams
+
+      return {
+        ...coverageParams,
+        scanAltitude: clampNumber(coverageParams.scanAltitude, 10, 200),
+        lineSpacing: clampNumber(coverageParams.lineSpacing, 5, 50),
+        orientation: clampNumber(coverageParams.orientation, -180, 180),
+      } as PatternParamsMap[K]
+    }
+    case 'perimeter': {
+      const perimeterParams = params as PerimeterPatternParams
+
+      return {
+        ...perimeterParams,
+        scanAltitude: clampNumber(perimeterParams.scanAltitude, 10, 200),
+        insetDistance: clampNumber(perimeterParams.insetDistance, 0, 30),
+        loops: clampInteger(perimeterParams.loops, 1, 5),
+      } as PatternParamsMap[K]
+    }
+    case 'orbit': {
+      const orbitParams = params as OrbitPatternParams
+
+      return {
+        ...orbitParams,
+        scanAltitude: clampNumber(orbitParams.scanAltitude, 10, 200),
+        radius: clampNumber(orbitParams.radius, 10, 200),
+        waypointCount: clampInteger(orbitParams.waypointCount, 8, 72),
+        loops: clampInteger(orbitParams.loops, 1, 5),
+        manualCenter: {
+          x: clampNumber(orbitParams.manualCenter.x, -120, 120),
+          y: clampNumber(orbitParams.manualCenter.y, -90, 90),
+        },
+      } as PatternParamsMap[K]
+    }
+    case 'spiral': {
+      const spiralParams = params as SpiralPatternParams
+
+      return {
+        ...spiralParams,
+        scanAltitude: clampNumber(spiralParams.scanAltitude, 10, 200),
+        armSpacing: clampNumber(spiralParams.armSpacing, 5, 40),
+      } as PatternParamsMap[K]
+    }
+    case 'grid': {
+      const gridParams = params as GridPatternParams
+
+      return {
+        ...gridParams,
+        scanAltitude: clampNumber(gridParams.scanAltitude, 10, 200),
+        lineSpacing: clampNumber(gridParams.lineSpacing, 5, 50),
+        orientation: clampNumber(gridParams.orientation, -180, 180),
+        crossAngle: clampNumber(gridParams.crossAngle, 45, 135),
+      } as PatternParamsMap[K]
+    }
+    case 'corridor': {
+      const corridorParams = params as CorridorPatternParams
+
+      return {
+        ...corridorParams,
+        scanAltitude: clampNumber(corridorParams.scanAltitude, 10, 200),
+        passes: clampInteger(corridorParams.passes, 1, 5),
+        passSpacing: clampNumber(corridorParams.passSpacing, 5, 30),
+      } as PatternParamsMap[K]
+    }
+  }
+}
+
 function generateCoverageMission({
   points,
-  scanAltitude,
-  lineSpacing,
-  orientation,
+  paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
+  const { scanAltitude, lineSpacing, orientation } = paramsByPattern.coverage
   const segments = generateCoverageSegments(points, lineSpacing, orientation)
   const waypoints = generateCoverageWaypoints(segments, scanAltitude)
 
@@ -251,30 +380,40 @@ function generateCoverageMission({
 
 function generatePerimeterMission({
   points,
-  scanAltitude,
+  paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
-  const direction: PerimeterPatternParams['direction'] = 'cw'
-  const loops = 1
-  const orderedBoundary = getPerimeterRing(points, direction)
+  const { scanAltitude, insetDistance, loops, direction } =
+    paramsByPattern.perimeter
+  const insetBoundary =
+    insetDistance > 0 ? insetPolygonRadially(points, insetDistance) : [...points]
+  const orderedBoundary = getPerimeterRing(insetBoundary, direction)
   const perimeterSegments = orderedBoundary.slice(1).map((point, index) => [
     orderedBoundary[index],
     point,
   ] as [Vec2, Vec2])
-  const waypoints = orderedBoundary.map((point, index) => ({
-    id: index + 1,
-    x: Math.round(point.x * 100) / 100,
-    y: Math.round(point.y * 100) / 100,
-    z: scanAltitude,
-    actions: [],
-  }))
+  const waypointRoute: MissionWaypoint[] = []
+
+  for (let loopIndex = 0; loopIndex < loops; loopIndex += 1) {
+    const loopPoints = loopIndex === 0 ? orderedBoundary : orderedBoundary.slice(1)
+
+    loopPoints.forEach((point) => {
+      waypointRoute.push({
+        id: waypointRoute.length + 1,
+        x: Math.round(point.x * 100) / 100,
+        y: Math.round(point.y * 100) / 100,
+        z: scanAltitude,
+        actions: [],
+      })
+    })
+  }
 
   return {
     patternId: 'perimeter',
     segments: perimeterSegments,
-    waypoints,
+    waypoints: waypointRoute,
     closed: true,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
+      estimatedLength: estimateWaypointPathLength(waypointRoute),
       loops,
       direction: direction.toUpperCase(),
     },
@@ -283,8 +422,19 @@ function generatePerimeterMission({
 
 function generateOrbitMission({
   points,
-  scanAltitude,
+  paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
+  const {
+    scanAltitude,
+    centerMode,
+    manualCenter,
+    radiusMode,
+    radius: manualRadius,
+    waypointCount,
+    loops,
+    direction,
+  } = paramsByPattern.orbit
+
   if (points.length < 3) {
     return {
       patternId: 'orbit',
@@ -299,44 +449,193 @@ function generateOrbitMission({
     }
   }
 
-  const center = polygonCentroid(points)
-  const radius = getAutoOrbitRadius(points, center)
-  const waypointCount = 24
-  const loops = 1
-  const direction: OrbitPatternParams['direction'] = 'cw'
-  const ring = buildOrbitRing({
+  const center =
+    centerMode === 'manual' ? manualCenter : getStableMissionCenter(points)
+  const radius =
+    radiusMode === 'manual'
+      ? manualRadius
+      : getAutoOrbitRadius(points, center)
+  const baseRing = buildOrbitRing({
     center,
     radius,
     waypointCount,
     direction,
   })
-  const segments = ring.slice(1).map((point, index) => [
-    ring[index],
+  const segments = baseRing.slice(1).map((point, index) => [
+    baseRing[index],
     point,
   ] as [Vec2, Vec2])
-  const waypoints = ring.map((point, index) => ({
-    id: index + 1,
-    x: Math.round(point.x * 100) / 100,
-    y: Math.round(point.y * 100) / 100,
-    z: scanAltitude,
-    actions: [],
-  }))
+  const orbitRoute: MissionWaypoint[] = []
+
+  for (let loopIndex = 0; loopIndex < loops; loopIndex += 1) {
+    const loopPoints = loopIndex === 0 ? baseRing : baseRing.slice(1)
+
+    loopPoints.forEach((point) => {
+      orbitRoute.push({
+        id: orbitRoute.length + 1,
+        x: Math.round(point.x * 100) / 100,
+        y: Math.round(point.y * 100) / 100,
+        z: scanAltitude,
+        actions: [],
+      })
+    })
+  }
 
   return {
     patternId: 'orbit',
     segments,
-    waypoints,
+    waypoints: orbitRoute,
     closed: true,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
+      estimatedLength: estimateWaypointPathLength(orbitRoute),
       loops,
       direction: direction.toUpperCase(),
     },
   }
 }
 
+function generateGridMission({
+  points,
+  paramsByPattern,
+}: FlightPatternBuildContext): FlightPatternMissionResult {
+  const { scanAltitude, lineSpacing, orientation, crossAngle } = paramsByPattern.grid
+  const primarySegments = generateCoverageSegments(points, lineSpacing, orientation)
+  const secondarySegments = generateCoverageSegments(
+    points,
+    lineSpacing,
+    orientation + crossAngle,
+  )
+  const primaryWaypoints = generateCoverageWaypoints(primarySegments, scanAltitude)
+  const secondaryWaypoints = generateCoverageWaypoints(
+    secondarySegments,
+    scanAltitude,
+  )
+  const stitchedSecondaryWaypoints = alignWaypointRouteToPrevious(
+    secondaryWaypoints,
+    primaryWaypoints.at(-1) ?? null,
+  )
+  const waypoints = normalizeWaypointIds([
+    ...primaryWaypoints,
+    ...stitchedSecondaryWaypoints,
+  ])
+
+  return {
+    patternId: 'grid',
+    segments: [...primarySegments, ...secondarySegments],
+    waypoints,
+    closed: false,
+    meta: {
+      estimatedLength: estimateWaypointPathLength(waypoints),
+      loops: 2,
+      direction: 'cross-hatch',
+    },
+  }
+}
+
+function generateCorridorMission({
+  points,
+  paramsByPattern,
+}: FlightPatternBuildContext): FlightPatternMissionResult {
+  const { scanAltitude, passes, passSpacing, direction } = paramsByPattern.corridor
+  const corridorSegments = buildCorridorSegments(points, passes, passSpacing)
+  const orderedSegments =
+    direction === 'reverse' ? [...corridorSegments].reverse() : corridorSegments
+  const waypoints = normalizeWaypointIds(
+    generateCoverageWaypoints(orderedSegments, scanAltitude),
+  )
+
+  return {
+    patternId: 'corridor',
+    segments: corridorSegments,
+    waypoints,
+    closed: false,
+    meta: {
+      estimatedLength: estimateWaypointPathLength(waypoints),
+      loops: passes,
+      direction: direction.toUpperCase(),
+    },
+  }
+}
+
+function generateSpiralMission({
+  points,
+  paramsByPattern,
+}: FlightPatternBuildContext): FlightPatternMissionResult {
+  const {
+    scanAltitude,
+    spiralDirection,
+    armSpacing,
+    rotationDirection,
+  } = paramsByPattern.spiral
+  const center = getStableMissionCenter(points)
+  const bounds = getPointBounds(points)
+  const boundingRadius = Math.max(
+    ...points.map((point) => distanceBetween2D(point, center)),
+    18,
+  )
+  const b = armSpacing / (Math.PI * 2)
+  const maxTheta = Math.max(boundingRadius / b, Math.PI * 2)
+  const sampleCount = Math.max(72, Math.ceil(maxTheta * 14))
+  const directionSign = rotationDirection === 'cw' ? -1 : 1
+  const outwardRoute: Vec2[] = []
+
+  for (let index = 0; index <= sampleCount; index += 1) {
+    const ratio = index / sampleCount
+    const theta = maxTheta * ratio
+    const radius = b * theta
+    const candidate = {
+      x: center.x + radius * Math.cos(directionSign * theta),
+      y: center.y + radius * Math.sin(directionSign * theta),
+    }
+
+    if (
+      candidate.x < bounds.minX - 4 ||
+      candidate.x > bounds.maxX + 4 ||
+      candidate.y < bounds.minY - 4 ||
+      candidate.y > bounds.maxY + 4
+    ) {
+      continue
+    }
+
+    if (isPointInPolygon(candidate, points)) {
+      outwardRoute.push(candidate)
+    }
+  }
+
+  const dedupedOutwardRoute = dedupeRoutePoints(outwardRoute)
+  const routePoints =
+    spiralDirection === 'outward'
+      ? dedupedOutwardRoute
+      : [...dedupedOutwardRoute].reverse()
+  const segments = routePoints.slice(1).map((point, index) => [
+    routePoints[index],
+    point,
+  ] as [Vec2, Vec2])
+  const waypoints = normalizeWaypointIds(
+    routePoints.map((point) => ({
+      id: 0,
+      x: Math.round(point.x * 100) / 100,
+      y: Math.round(point.y * 100) / 100,
+      z: scanAltitude,
+      actions: [],
+    })),
+  )
+
+  return {
+    patternId: 'spiral',
+    segments,
+    waypoints,
+    closed: false,
+    meta: {
+      estimatedLength: estimateWaypointPathLength(waypoints),
+      loops: 1,
+      direction: `${spiralDirection.toUpperCase()} ${rotationDirection.toUpperCase()}`,
+    },
+  }
+}
+
 function getPerimeterRing(
-  points: MissionPoint[],
+  points: Array<Pick<MissionPoint, 'x' | 'y'>>,
   direction: PerimeterPatternParams['direction'],
 ): Vec2[] {
   if (points.length < 3) {
@@ -391,6 +690,93 @@ function getAutoOrbitRadius(points: MissionPoint[], center: Vec2): number {
   return Math.max(farthestDistance, 18)
 }
 
+function buildCorridorSegments(
+  points: MissionPoint[],
+  passes: number,
+  passSpacing: number,
+): Array<[Vec2, Vec2]> {
+  if (points.length < 3) {
+    return []
+  }
+
+  const bounds = getPointBounds(points)
+  const center = getStableMissionCenter(points)
+  const isHorizontal = bounds.width >= bounds.height
+  const angle = isHorizontal ? 0 : 90
+  const offsets = getPassOffsets(passes, passSpacing)
+  const segments = offsets
+    .map((offset) => getLongestCrossSection(points, center, angle, offset))
+    .filter((segment): segment is [Vec2, Vec2] => segment !== null)
+
+  return segments
+}
+
+function getPassOffsets(passes: number, passSpacing: number): number[] {
+  if (passes <= 1) {
+    return [0]
+  }
+
+  return Array.from({ length: passes }, (_, index) => {
+    const centeredIndex = index - (passes - 1) / 2
+    return centeredIndex * passSpacing
+  })
+}
+
+function getLongestCrossSection(
+  points: MissionPoint[],
+  center: Vec2,
+  angleDegrees: number,
+  offsetFromCenter: number,
+): [Vec2, Vec2] | null {
+  const rotated = points.map((point) => rotatePoint(point, center, -angleDegrees))
+  const targetY = rotatePoint(
+    { x: center.x, y: center.y + offsetFromCenter },
+    center,
+    -angleDegrees,
+  ).y
+  const intersections: number[] = []
+
+  for (let index = 0; index < rotated.length; index += 1) {
+    const current = rotated[index]
+    const next = rotated[(index + 1) % rotated.length]
+    const lowY = Math.min(current.y, next.y)
+    const highY = Math.max(current.y, next.y)
+
+    if (lowY === highY || targetY < lowY || targetY >= highY) {
+      continue
+    }
+
+    const ratio = (targetY - current.y) / (next.y - current.y)
+    intersections.push(current.x + (next.x - current.x) * ratio)
+  }
+
+  intersections.sort((left, right) => left - right)
+
+  let bestSegment: [Vec2, Vec2] | null = null
+  let bestLength = 0
+
+  for (let index = 0; index < intersections.length - 1; index += 2) {
+    const start = rotatePoint(
+      { x: intersections[index], y: targetY },
+      center,
+      angleDegrees,
+    )
+    const end = rotatePoint(
+      { x: intersections[index + 1], y: targetY },
+      center,
+      angleDegrees,
+    )
+    const length = distanceBetween2D(start, end)
+
+    if (length > bestLength) {
+      bestLength = length
+      bestSegment = [start, end]
+    }
+  }
+
+  return bestSegment
+}
+
 function estimateWaypointPathLength(waypoints: MissionWaypoint[]): number {
   let total = 0
 
@@ -399,6 +785,67 @@ function estimateWaypointPathLength(waypoints: MissionWaypoint[]): number {
   }
 
   return Math.round(total * 100) / 100
+}
+
+function alignWaypointRouteToPrevious(
+  waypoints: MissionWaypoint[],
+  previousWaypoint: MissionWaypoint | null,
+): MissionWaypoint[] {
+  if (waypoints.length === 0 || !previousWaypoint) {
+    return [...waypoints]
+  }
+
+  const forwardDistance = distanceBetween(previousWaypoint, waypoints[0])
+  const reverseDistance = distanceBetween(
+    previousWaypoint,
+    waypoints[waypoints.length - 1],
+  )
+
+  return reverseDistance < forwardDistance ? [...waypoints].reverse() : [...waypoints]
+}
+
+function normalizeWaypointIds(waypoints: MissionWaypoint[]): MissionWaypoint[] {
+  return waypoints.map((waypoint, index) => ({
+    ...waypoint,
+    id: index + 1,
+  }))
+}
+
+function insetPolygonRadially(
+  points: XYPoint[],
+  insetDistance: number,
+): XYPoint[] {
+  const center = getStableMissionCenter(points)
+
+  return points.map((point) => {
+    const dx = center.x - point.x
+    const dy = center.y - point.y
+    const distance = Math.sqrt(dx * dx + dy * dy)
+
+    if (distance <= insetDistance + 0.5) {
+      return {
+        x: point.x + dx * 0.35,
+        y: point.y + dy * 0.35,
+      }
+    }
+
+    const ratio = insetDistance / distance
+
+    return {
+      x: point.x + dx * ratio,
+      y: point.y + dy * ratio,
+    }
+  })
+}
+
+function dedupeRoutePoints(points: Vec2[]): Vec2[] {
+  return points.filter((point, index) => {
+    if (index === 0) {
+      return true
+    }
+
+    return distanceBetween2D(points[index - 1], point) > 0.8
+  })
 }
 
 function distanceBetween(
@@ -412,15 +859,103 @@ function distanceBetween(
   return Math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 
-function ensureClockwise(points: MissionPoint[]): MissionPoint[] {
+function distanceBetween2D(
+  start: Pick<Vec2, 'x' | 'y'>,
+  end: Pick<Vec2, 'x' | 'y'>,
+): number {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+function getStableMissionCenter(points: XYPoint[]): Vec2 {
+  const centroid = polygonCentroid(points)
+
+  if (isPointInPolygon(centroid, points)) {
+    return centroid
+  }
+
+  const bounds = getPointBounds(points)
+
+  return {
+    x: bounds.minX + bounds.width / 2,
+    y: bounds.minY + bounds.height / 2,
+  }
+}
+
+function getPointBounds(points: Array<Pick<MissionPoint, 'x' | 'y'>>) {
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+  }
+}
+
+function isPointInPolygon(
+  point: Pick<Vec2, 'x' | 'y'>,
+  polygon: Array<Pick<MissionPoint, 'x' | 'y'>>,
+): boolean {
+  let inside = false
+
+  for (
+    let left = 0, right = polygon.length - 1;
+    left < polygon.length;
+    right = left, left += 1
+  ) {
+    const leftPoint = polygon[left]
+    const rightPoint = polygon[right]
+    const intersects =
+      leftPoint.y > point.y !== rightPoint.y > point.y &&
+      point.x <
+        ((rightPoint.x - leftPoint.x) * (point.y - leftPoint.y)) /
+          (rightPoint.y - leftPoint.y) +
+          leftPoint.x
+
+    if (intersects) {
+      inside = !inside
+    }
+  }
+
+  return inside
+}
+
+function rotatePoint(
+  point: Pick<Vec2, 'x' | 'y'>,
+  center: Vec2,
+  angleDegrees: number,
+): Vec2 {
+  const radians = (angleDegrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const translatedX = point.x - center.x
+  const translatedY = point.y - center.y
+
+  return {
+    x: center.x + translatedX * cos - translatedY * sin,
+    y: center.y + translatedX * sin + translatedY * cos,
+  }
+}
+
+function ensureClockwise(points: XYPoint[]): XYPoint[] {
   return getSignedPolygonArea(points) > 0 ? [...points].reverse() : [...points]
 }
 
-function ensureCounterClockwise(points: MissionPoint[]): MissionPoint[] {
+function ensureCounterClockwise(points: XYPoint[]): XYPoint[] {
   return getSignedPolygonArea(points) < 0 ? [...points].reverse() : [...points]
 }
 
-function getSignedPolygonArea(points: MissionPoint[]): number {
+function getSignedPolygonArea(points: XYPoint[]): number {
   let area = 0
 
   for (let index = 0; index < points.length; index += 1) {
@@ -430,4 +965,12 @@ function getSignedPolygonArea(points: MissionPoint[]): number {
   }
 
   return area / 2
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.round(clampNumber(value, min, max))
 }
