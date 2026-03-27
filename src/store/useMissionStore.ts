@@ -1,5 +1,14 @@
 import { create } from 'zustand'
 import {
+  DEFAULT_DRONE_PROFILE_ID,
+  DEFAULT_HOME_POINT,
+  DEFAULT_SAFETY_PRESET_ID,
+} from '../lib/batteryPresets'
+import type {
+  DroneProfileOverrides,
+  Vec3,
+} from '../lib/batteryModels'
+import {
   cloneWaypointAction,
   createDefaultWaypointAction,
   patchWaypointAction,
@@ -33,6 +42,10 @@ interface MissionState {
   scanAltitude: number
   lineSpacing: number
   orientation: number
+  droneProfileId: string
+  droneProfileOverrides: DroneProfileOverrides | null
+  homePoint: Vec3
+  safetyPresetId: string
   points: MissionPoint[]
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
@@ -44,6 +57,10 @@ interface MissionState {
   setScanAltitude: (value: number) => void
   setLineSpacing: (value: number) => void
   setOrientation: (value: number) => void
+  setDroneProfileId: (id: string) => void
+  setDroneProfileOverrides: (overrides: DroneProfileOverrides | null) => void
+  setHomePoint: (point: Vec3) => void
+  setSafetyPresetId: (id: string) => void
   enterSetup: () => void
   cancelSetup: () => void
   startDrawing: () => void
@@ -90,6 +107,10 @@ const initialState = {
   scanAltitude: DEFAULT_ALTITUDE,
   lineSpacing: DEFAULT_SPACING,
   orientation: DEFAULT_ORIENTATION,
+  droneProfileId: DEFAULT_DRONE_PROFILE_ID,
+  droneProfileOverrides: null as DroneProfileOverrides | null,
+  homePoint: { ...DEFAULT_HOME_POINT } as Vec3,
+  safetyPresetId: DEFAULT_SAFETY_PRESET_ID,
   points: [] as MissionPoint[],
   waypoints: [] as MissionWaypoint[],
   selectedWaypointId: null as number | null,
@@ -105,6 +126,23 @@ export const useMissionStore = create<MissionState>((set) => ({
   setScanAltitude: (value) => set({ scanAltitude: value }),
   setLineSpacing: (value) => set({ lineSpacing: value }),
   setOrientation: (value) => set({ orientation: value }),
+  setDroneProfileId: (id) =>
+    set({
+      droneProfileId: id,
+      droneProfileOverrides: null,
+    }),
+  setDroneProfileOverrides: (overrides) =>
+    set({
+      droneProfileOverrides: overrides,
+    }),
+  setHomePoint: (point) =>
+    set({
+      homePoint: point,
+    }),
+  setSafetyPresetId: (id) =>
+    set({
+      safetyPresetId: id,
+    }),
   enterSetup: () =>
     set({
       stage: 'setup',
