@@ -33,6 +33,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   MissionViewport3D,
+  type WaypointContextMenuRequest,
   type ViewportAnimationState,
 } from './components/MissionViewport3D'
 import {
@@ -89,6 +90,11 @@ interface InteractionNotice {
 interface OverlayAnchor {
   x: number
   y: number
+}
+
+interface WaypointRadialMenuState {
+  waypointId: number
+  anchor: OverlayAnchor
 }
 
 function App() {
@@ -149,14 +155,19 @@ function App() {
   const [patternPickerAnchor, setPatternPickerAnchor] = useState<OverlayAnchor | null>(
     null,
   )
+  const [waypointRadialMenu, setWaypointRadialMenu] =
+    useState<WaypointRadialMenuState | null>(null)
   const [viewportAnimationState, setViewportAnimationState] =
     useState<ViewportAnimationState>('settled')
   const [skipAnimationToken, setSkipAnimationToken] = useState(0)
+  const [actionEditorFocusToken, setActionEditorFocusToken] = useState(0)
   const [viewportStageSize, setViewportStageSize] = useState({
     width: 0,
     height: 0,
   })
   const patternPickerRef = useRef<HTMLDivElement | null>(null)
+  const waypointRadialMenuRef = useRef<HTMLDivElement | null>(null)
+  const waypointActionEditorRef = useRef<HTMLDivElement | null>(null)
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
   const selectedPatternOption = useMemo(
@@ -265,6 +276,22 @@ function App() {
       ? interactionNotice
       : null
 
+  const radialMenuWaypoint = useMemo(
+    () =>
+      waypointRadialMenu
+        ? waypoints.find((waypoint) => waypoint.id === waypointRadialMenu.waypointId) ??
+          null
+        : null,
+    [waypointRadialMenu, waypoints],
+  )
+  const radialMenuActionTypes = useMemo(
+    () =>
+      new Set(
+        radialMenuWaypoint?.actions.map((action) => action.type) ?? [],
+      ),
+    [radialMenuWaypoint],
+  )
+
   function dismissPatternPicker() {
     if (patternPickerDelayRef.current !== null) {
       window.clearTimeout(patternPickerDelayRef.current)
@@ -273,6 +300,10 @@ function App() {
 
     setPatternPickerVisible(false)
     setHoveredPattern(null)
+  }
+
+  function dismissWaypointRadialMenu() {
+    setWaypointRadialMenu(null)
   }
 
   function requestSkipAnimation() {
@@ -351,12 +382,57 @@ function App() {
   }, [patternPickerVisible])
 
   useEffect(() => {
+    if (!waypointRadialMenu) {
+      return undefined
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        dismissWaypointRadialMenu()
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (waypointRadialMenuRef.current?.contains(event.target as Node)) {
+        return
+      }
+
+      dismissWaypointRadialMenu()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('pointerdown', handlePointerDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [waypointRadialMenu])
+
+  useEffect(() => {
     return () => {
       if (patternPickerDelayRef.current !== null) {
         window.clearTimeout(patternPickerDelayRef.current)
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (actionEditorFocusToken === 0 || stage !== 'generated') {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      waypointActionEditorRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [actionEditorFocusToken, stage])
 
   useEffect(() => {
     if (stage !== 'generated') {
@@ -367,14 +443,41 @@ function App() {
       if (isBulkAssignActive(bulkAssignActionType)) {
         setBulkAssignActionType(null)
       }
+
+      if (waypointRadialMenu) {
+        const frameId = window.requestAnimationFrame(() => {
+          dismissWaypointRadialMenu()
+        })
+
+        return () => {
+          window.cancelAnimationFrame(frameId)
+        }
+      }
     }
+
+    return undefined
   }, [
     bulkAssignActionType,
     hoveredWaypointId,
     setBulkAssignActionType,
     setHoveredWaypoint,
     stage,
+    waypointRadialMenu,
   ])
+
+  useEffect(() => {
+    if (waypointRadialMenu && !radialMenuWaypoint) {
+      const frameId = window.requestAnimationFrame(() => {
+        dismissWaypointRadialMenu()
+      })
+
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
+    return undefined
+  }, [radialMenuWaypoint, waypointRadialMenu])
 
   useEffect(() => {
     if (!isBulkAssignActive(bulkAssignActionType)) {
@@ -573,6 +676,7 @@ function App() {
 
   function handleResetMission() {
     dismissPatternPicker()
+    dismissWaypointRadialMenu()
     clearInteractionNotice()
     setSelectedPattern('coverage')
     setPatternParamsByPattern(createInitialPatternParams())
@@ -582,6 +686,7 @@ function App() {
 
   function handleRedrawMission() {
     dismissPatternPicker()
+    dismissWaypointRadialMenu()
     clearInteractionNotice()
     redrawMission()
   }
@@ -599,6 +704,38 @@ function App() {
             message: `${nextPattern.shortLabel} is wired for popup selection and preview, but generator logic is still pending.`,
           },
     )
+  }
+
+  function handleWaypointContextMenu({
+    waypointId,
+    clientX,
+    clientY,
+  }: WaypointContextMenuRequest) {
+    const bounds = viewportStageRef.current?.getBoundingClientRect()
+
+    if (!bounds) {
+      return
+    }
+
+    setWaypointRadialMenu({
+      waypointId,
+      anchor: {
+        x: clientX - bounds.left,
+        y: clientY - bounds.top,
+      },
+    })
+  }
+
+  function handleQuickAddWaypointAction(type: MissionWaypointActionType) {
+    if (!radialMenuWaypoint) {
+      return
+    }
+
+    setPendingActionType(type)
+    addWaypointAction(radialMenuWaypoint.id, type)
+    selectWaypoint(radialMenuWaypoint.id)
+    dismissWaypointRadialMenu()
+    setActionEditorFocusToken((current) => current + 1)
   }
 
   const viewportHint = activeNotice?.message
@@ -622,6 +759,10 @@ function App() {
             : null
   const patternPickerPosition = getPatternPickerPosition(
     patternPickerAnchor,
+    viewportStageSize,
+  )
+  const waypointRadialMenuPosition = getWaypointRadialMenuPosition(
+    waypointRadialMenu?.anchor ?? null,
     viewportStageSize,
   )
 
@@ -670,6 +811,11 @@ function App() {
             className={`viewport-stage ${
               stage === 'setup' || stage === 'drawing' ? 'is-drawing' : ''
             } ${stage === 'drawing' && isReadyToClose ? 'is-ready-to-close' : ''}`}
+            onContextMenu={(event) => {
+              if (stage === 'generated' || waypointRadialMenu) {
+                event.preventDefault()
+              }
+            }}
           >
             {viewportHint && (
               <div
@@ -692,6 +838,7 @@ function App() {
               selectedPattern={selectedPattern}
               hoveredPattern={hoveredPattern}
               patternPickerVisible={patternPickerVisible}
+              waypointContextMenuVisible={waypointRadialMenu !== null}
               skipAnimationToken={skipAnimationToken}
               onStartDrawing={startDrawing}
               onAddPoint={handleAddPoint}
@@ -702,6 +849,7 @@ function App() {
               onPatternPickerAnchorChange={setPatternPickerAnchor}
               onAnimationStateChange={setViewportAnimationState}
               onHoveredWaypointChange={setHoveredWaypoint}
+              onWaypointContextMenu={handleWaypointContextMenu}
             />
 
             {viewportAnimationState === 'animating' && (
@@ -777,6 +925,46 @@ function App() {
                 </button>
               </div>
             )}
+
+            {waypointRadialMenu &&
+              waypointRadialMenuPosition &&
+              radialMenuWaypoint && (
+                <div
+                  ref={waypointRadialMenuRef}
+                  className="waypoint-radial-menu"
+                  style={{
+                    left: `${waypointRadialMenuPosition.left}px`,
+                    top: `${waypointRadialMenuPosition.top}px`,
+                  }}
+                >
+                  <div className="waypoint-radial-core">
+                    <strong>WP {radialMenuWaypoint.id}</strong>
+                    <span>Quick Action</span>
+                  </div>
+
+                  {getWaypointRadialItems().map((item) => (
+                    <button
+                      key={item.type}
+                      type="button"
+                      className="waypoint-radial-item"
+                      style={{
+                        left: `${item.x}%`,
+                        top: `${item.y}%`,
+                      }}
+                      onClick={() => handleQuickAddWaypointAction(item.type)}
+                      title={item.description}
+                    >
+                      <span className="waypoint-radial-icon">
+                        {renderWaypointActionIcon(item.type)}
+                      </span>
+                      <span className="waypoint-radial-label">{item.shortLabel}</span>
+                      {radialMenuActionTypes.has(item.type) && (
+                        <span className="waypoint-radial-dot" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
 
             <div className="viewport-toolbar" aria-label="Viewport tools">
               {toolbarItems.map(({ id, label, icon: Icon }) => (
@@ -1430,17 +1618,19 @@ function App() {
                 ))}
 
                 {selectedWaypoint ? (
-                  <WaypointActionEditor
-                    waypoint={selectedWaypoint}
-                    validationMessages={selectedWaypointValidationMessages}
-                    pendingActionType={pendingActionType}
-                    selectedActionDescription={selectedActionOption.description}
-                    onPendingActionTypeChange={setPendingActionType}
-                    onAddAction={addWaypointAction}
-                    onUpdateAction={updateWaypointAction}
-                    onRemoveAction={removeWaypointAction}
-                    onMoveAction={moveWaypointAction}
-                  />
+                  <div ref={waypointActionEditorRef}>
+                    <WaypointActionEditor
+                      waypoint={selectedWaypoint}
+                      validationMessages={selectedWaypointValidationMessages}
+                      pendingActionType={pendingActionType}
+                      selectedActionDescription={selectedActionOption.description}
+                      onPendingActionTypeChange={setPendingActionType}
+                      onAddAction={addWaypointAction}
+                      onUpdateAction={updateWaypointAction}
+                      onRemoveAction={removeWaypointAction}
+                      onMoveAction={moveWaypointAction}
+                    />
+                  </div>
                 ) : (
                   <div className="empty-action-state">
                     Select a waypoint to configure node actions.
@@ -2097,6 +2287,58 @@ function getPatternPickerPosition(
     top: clampValue(anchor.y - 20, popupHeight + margin, height - margin),
     placement: 'above',
   }
+}
+
+function getWaypointRadialMenuPosition(
+  anchor: OverlayAnchor | null,
+  containerSize: { width: number; height: number },
+): { left: number; top: number } | null {
+  if (!anchor || containerSize.width === 0 || containerSize.height === 0) {
+    return null
+  }
+
+  const menuSize = 228
+  const radius = menuSize / 2
+  const margin = 18
+
+  return {
+    left: clampValue(anchor.x, radius + margin, containerSize.width - radius - margin),
+    top: clampValue(
+      anchor.y,
+      radius + margin,
+      containerSize.height - radius - margin,
+    ),
+  }
+}
+
+function getWaypointRadialItems(): Array<{
+  type: MissionWaypointActionType
+  shortLabel: string
+  description: string
+  x: number
+  y: number
+}> {
+  const positionByType: Record<
+    MissionWaypointActionType,
+    { x: number; y: number; shortLabel: string }
+  > = {
+    take_photo: { x: 50, y: 10, shortLabel: 'Photo' },
+    record_video: { x: 77, y: 23, shortLabel: 'Video' },
+    drop_payload: { x: 90, y: 50, shortLabel: 'Drop' },
+    fire_suppress: { x: 77, y: 77, shortLabel: 'Foam' },
+    change_altitude: { x: 50, y: 90, shortLabel: 'Alt' },
+    trigger_sensor: { x: 23, y: 77, shortLabel: 'Sensor' },
+    set_gimbal: { x: 10, y: 50, shortLabel: 'Gimbal' },
+    hover: { x: 23, y: 23, shortLabel: 'Hold' },
+  }
+
+  return WAYPOINT_ACTION_OPTIONS.map((option) => ({
+    type: option.type,
+    shortLabel: positionByType[option.type].shortLabel,
+    description: option.description,
+    x: positionByType[option.type].x,
+    y: positionByType[option.type].y,
+  }))
 }
 
 function clampValue(value: number, min: number, max: number): number {

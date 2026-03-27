@@ -57,6 +57,11 @@ const PATTERN_OVERLAY_OFFSET = 0.22
 const PATTERN_FILL_OFFSET = 0.04
 type ScenePoint = [number, number, number]
 export type ViewportAnimationState = 'animating' | 'skipped' | 'settled'
+export interface WaypointContextMenuRequest {
+  waypointId: number
+  clientX: number
+  clientY: number
+}
 type OrbitControlsHandle = {
   target: THREE.Vector3
   update: () => void
@@ -78,6 +83,7 @@ interface MissionViewport3DProps {
   selectedPattern: FlightPatternId
   hoveredPattern: FlightPatternId | null
   patternPickerVisible: boolean
+  waypointContextMenuVisible?: boolean
   skipAnimationToken: number
   onStartDrawing: () => void
   onAddPoint: (x: number, y: number) => void
@@ -85,6 +91,7 @@ interface MissionViewport3DProps {
   onClosePolygon: () => void
   onSelectWaypoint: (id: number | null) => void
   onHoveredWaypointChange?: (id: number | null) => void
+  onWaypointContextMenu?: (request: WaypointContextMenuRequest) => void
   onReadyToCloseChange?: (ready: boolean) => void
   onPatternPickerAnchorChange?: (anchor: Vec2 | null) => void
   onAnimationStateChange?: (state: ViewportAnimationState) => void
@@ -100,6 +107,7 @@ export function MissionViewport3D({
   selectedPattern,
   hoveredPattern,
   patternPickerVisible,
+  waypointContextMenuVisible = false,
   skipAnimationToken,
   onStartDrawing,
   onAddPoint,
@@ -107,6 +115,7 @@ export function MissionViewport3D({
   onClosePolygon,
   onSelectWaypoint,
   onHoveredWaypointChange,
+  onWaypointContextMenu,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onAnimationStateChange,
@@ -191,6 +200,7 @@ export function MissionViewport3D({
           selectedPattern={selectedPattern}
           hoveredPattern={hoveredPattern}
           patternPickerVisible={patternPickerVisible}
+          waypointContextMenuVisible={waypointContextMenuVisible}
           inputLocked={isAnimationLocked}
           skipAnimationToken={skipAnimationToken}
           onStartDrawing={onStartDrawing}
@@ -201,6 +211,7 @@ export function MissionViewport3D({
           onClosePolygon={onClosePolygon}
           onSelectWaypoint={onSelectWaypoint}
           onHoveredWaypointChange={onHoveredWaypointChange}
+          onWaypointContextMenu={onWaypointContextMenu}
           onReadyToCloseChange={onReadyToCloseChange}
           onPatternPickerAnchorChange={onPatternPickerAnchorChange}
           onHoverPointChange={setHoverPoint}
@@ -218,6 +229,7 @@ export function MissionViewport3D({
         enabled={
           draggingPointId === null &&
           !patternPickerVisible &&
+          !waypointContextMenuVisible &&
           !isAnimationLocked
         }
         enableDamping
@@ -230,6 +242,7 @@ export function MissionViewport3D({
         enablePan={
           stage !== 'drawing' &&
           !patternPickerVisible &&
+          !waypointContextMenuVisible &&
           !isAnimationLocked
         }
       />
@@ -240,6 +253,7 @@ export function MissionViewport3D({
         cameraTarget={cameraTarget}
         draggingPointId={draggingPointId}
         patternPickerVisible={patternPickerVisible}
+        waypointContextMenuVisible={waypointContextMenuVisible}
         animationLocked={isAnimationLocked}
         orbitControlsRef={orbitControlsRef}
       />
@@ -278,6 +292,7 @@ function MissionWorld({
   selectedPattern,
   hoveredPattern,
   patternPickerVisible,
+  waypointContextMenuVisible = false,
   inputLocked,
   skipAnimationToken,
   onStartDrawing,
@@ -288,6 +303,7 @@ function MissionWorld({
   onClosePolygon,
   onSelectWaypoint,
   onHoveredWaypointChange,
+  onWaypointContextMenu,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onHoverPointChange,
@@ -720,6 +736,10 @@ function MissionWorld({
       return
     }
 
+    if (waypointContextMenuVisible) {
+      return
+    }
+
     if (!isPrimaryClickGesture(event)) {
       return
     }
@@ -1089,6 +1109,20 @@ function MissionWorld({
 
                 onSelectWaypoint(waypoint.id)
               }}
+              onContextMenu={(event) => {
+                event.stopPropagation()
+                event.nativeEvent.preventDefault()
+
+                if (inputLocked) {
+                  return
+                }
+
+                onWaypointContextMenu?.({
+                  waypointId: waypoint.id,
+                  clientX: event.clientX,
+                  clientY: event.clientY,
+                })
+              }}
             >
               <mesh>
                 <sphereGeometry args={[isSelected ? 2.7 : 2.3, 28, 28]} />
@@ -1156,6 +1190,7 @@ function DrawingCameraController({
   cameraTarget,
   draggingPointId,
   patternPickerVisible,
+  waypointContextMenuVisible,
   animationLocked,
   orbitControlsRef,
 }: {
@@ -1165,6 +1200,7 @@ function DrawingCameraController({
   cameraTarget: Vec2
   draggingPointId: number | null
   patternPickerVisible: boolean
+  waypointContextMenuVisible: boolean
   animationLocked: boolean
   orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
 }) {
@@ -1187,16 +1223,29 @@ function DrawingCameraController({
     }
 
     controls.enabled =
-      draggingPointId === null && !patternPickerVisible && !animationLocked
+      draggingPointId === null &&
+      !patternPickerVisible &&
+      !waypointContextMenuVisible &&
+      !animationLocked
     controls.enablePan =
-      stage !== 'drawing' && !patternPickerVisible && !animationLocked
+      stage !== 'drawing' &&
+      !patternPickerVisible &&
+      !waypointContextMenuVisible &&
+      !animationLocked
     controls.enableRotate = true
     controls.enableZoom = true
     controls.minPolarAngle = DEFAULT_MIN_POLAR_ANGLE
     controls.maxPolarAngle =
       stage === 'drawing' ? DRAWING_MAX_POLAR_ANGLE : DEFAULT_MAX_POLAR_ANGLE
     controls.update()
-  }, [animationLocked, draggingPointId, orbitControlsRef, patternPickerVisible, stage])
+  }, [
+    animationLocked,
+    draggingPointId,
+    orbitControlsRef,
+    patternPickerVisible,
+    stage,
+    waypointContextMenuVisible,
+  ])
 
   useFrame((_, delta) => {
     const controls = orbitControlsRef.current
@@ -1205,7 +1254,12 @@ function DrawingCameraController({
       return
     }
 
-    if (patternPickerVisible || draggingPointId !== null || animationLocked) {
+    if (
+      patternPickerVisible ||
+      waypointContextMenuVisible ||
+      draggingPointId !== null ||
+      animationLocked
+    ) {
       return
     }
 

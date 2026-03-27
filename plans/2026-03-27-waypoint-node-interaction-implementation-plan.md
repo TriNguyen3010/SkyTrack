@@ -134,6 +134,8 @@ Status: implemented, build/lint passed. Store now carries `startWaypointId`, `ho
 
 ### Stream B: Quick Action Radial Menu
 
+Status: implemented, pending visual/runtime verification. Right-click on a generated waypoint now opens a viewport radial menu, native browser context menu is suppressed in generated mode, quick-add inserts a default action then focuses the sidebar editor, and the menu closes cleanly on `Esc`, outside click, redraw, reset, or stage exit.
+
 #### Scope
 
 - right-click waypoint mở radial menu theo screen-space
@@ -289,7 +291,7 @@ Lý do:
 ## 12. Checklist đối chiếu
 
 - [x] Stream A: Waypoint interaction foundation
-- [ ] Stream B: Quick action radial menu
+- [x] Stream B: Quick action radial menu
 - [ ] Stream C: Bulk assign + viewport/sidebar sync
 - [ ] Stream D: Sidebar action panel upgrade
 - [ ] Stream E: Start node semantics + visual markers
