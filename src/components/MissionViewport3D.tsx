@@ -84,6 +84,7 @@ interface MissionViewport3DProps {
   onUpdatePoint: (id: number, x: number, y: number) => void
   onClosePolygon: () => void
   onSelectWaypoint: (id: number | null) => void
+  onHoveredWaypointChange?: (id: number | null) => void
   onReadyToCloseChange?: (ready: boolean) => void
   onPatternPickerAnchorChange?: (anchor: Vec2 | null) => void
   onAnimationStateChange?: (state: ViewportAnimationState) => void
@@ -105,6 +106,7 @@ export function MissionViewport3D({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onHoveredWaypointChange,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onAnimationStateChange,
@@ -198,6 +200,7 @@ export function MissionViewport3D({
           onUpdatePoint={onUpdatePoint}
           onClosePolygon={onClosePolygon}
           onSelectWaypoint={onSelectWaypoint}
+          onHoveredWaypointChange={onHoveredWaypointChange}
           onReadyToCloseChange={onReadyToCloseChange}
           onPatternPickerAnchorChange={onPatternPickerAnchorChange}
           onHoverPointChange={setHoverPoint}
@@ -284,6 +287,7 @@ function MissionWorld({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onHoveredWaypointChange,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onHoverPointChange,
@@ -743,6 +747,7 @@ function MissionWorld({
     }
 
     if (stage === 'generated') {
+      onHoveredWaypointChange?.(null)
       onSelectWaypoint(null)
     }
   }
@@ -1069,6 +1074,12 @@ function MissionWorld({
             <group
               key={waypoint.id}
               position={toAltitudeMarkerPosition(waypoint, waypoint.z)}
+              onPointerEnter={() => {
+                onHoveredWaypointChange?.(waypoint.id)
+              }}
+              onPointerLeave={() => {
+                onHoveredWaypointChange?.(null)
+              }}
               onClick={(event) => {
                 event.stopPropagation()
 

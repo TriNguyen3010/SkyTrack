@@ -922,6 +922,16 @@
   line-height: 1.45;
 }
 
+.generated-route-order-note {
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.04);
+  padding: 10px 12px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 .selected-waypoint-summary {
   border-radius: 10px;
   background: rgba(108, 92, 231, 0.09);

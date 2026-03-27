@@ -67,6 +67,11 @@ import {
   type MissionWaypointActionType,
   type WaypointActionPatch,
 } from './lib/waypointActions'
+import {
+  deriveWaypointInteractionModel,
+  getWaypointValidationWarnings,
+  isBulkAssignActive,
+} from './lib/waypointInteraction'
 import './App.css'
 
 const toolbarItems = [
@@ -96,6 +101,9 @@ function App() {
   const points = useMissionStore((state) => state.points)
   const waypoints = useMissionStore((state) => state.waypoints)
   const selectedWaypointId = useMissionStore((state) => state.selectedWaypointId)
+  const startWaypointId = useMissionStore((state) => state.startWaypointId)
+  const hoveredWaypointId = useMissionStore((state) => state.hoveredWaypointId)
+  const bulkAssignActionType = useMissionStore((state) => state.bulkAssignActionType)
   const setOperationMode = useMissionStore((state) => state.setOperationMode)
   const setEditorTab = useMissionStore((state) => state.setEditorTab)
   const setScanAltitude = useMissionStore((state) => state.setScanAltitude)
@@ -113,6 +121,11 @@ function App() {
   const addPoint = useMissionStore((state) => state.addPoint)
   const updatePoint = useMissionStore((state) => state.updatePoint)
   const selectWaypoint = useMissionStore((state) => state.selectWaypoint)
+  const setStartWaypoint = useMissionStore((state) => state.setStartWaypoint)
+  const setHoveredWaypoint = useMissionStore((state) => state.setHoveredWaypoint)
+  const setBulkAssignActionType = useMissionStore(
+    (state) => state.setBulkAssignActionType,
+  )
   const addWaypointAction = useMissionStore((state) => state.addWaypointAction)
   const updateWaypointAction = useMissionStore((state) => state.updateWaypointAction)
   const removeWaypointAction = useMissionStore((state) => state.removeWaypointAction)
@@ -197,6 +210,19 @@ function App() {
     [selectedPatternMission],
   )
   const selectedPatternMeta = selectedPatternMission?.meta ?? null
+  const waypointInteractionModel = useMemo(
+    () =>
+      deriveWaypointInteractionModel({
+        patternId: selectedPattern,
+        waypoints,
+        requestedStartWaypointId: startWaypointId,
+      }),
+    [selectedPattern, startWaypointId, waypoints],
+  )
+  const orderedWaypoints = waypointInteractionModel.orderedWaypoints
+  const effectiveStartWaypointId = waypointInteractionModel.effectiveStartWaypointId
+  const missionEndWaypointId = waypointInteractionModel.endWaypointId
+  const isClosedMissionLoop = waypointInteractionModel.isClosedLoop
   const area = useMemo(() => polygonArea(points), [points])
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
@@ -218,11 +244,20 @@ function App() {
     [waypoints],
   )
   const selectedWaypointValidationMessages = useMemo(
-    () =>
-      selectedWaypoint
-        ? selectedWaypoint.actions.flatMap((action) => validateWaypointAction(action))
-        : [],
-    [selectedWaypoint],
+    () => {
+      if (!selectedWaypoint) {
+        return []
+      }
+
+      return [
+        ...selectedWaypoint.actions.flatMap((action) => validateWaypointAction(action)),
+        ...getWaypointValidationWarnings({
+          waypoint: selectedWaypoint,
+          effectiveStartWaypointId,
+        }),
+      ]
+    },
+    [effectiveStartWaypointId, selectedWaypoint],
   )
   const activeNotice =
     interactionNotice &&
@@ -322,6 +357,60 @@ function App() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (stage !== 'generated') {
+      if (hoveredWaypointId !== null) {
+        setHoveredWaypoint(null)
+      }
+
+      if (isBulkAssignActive(bulkAssignActionType)) {
+        setBulkAssignActionType(null)
+      }
+    }
+  }, [
+    bulkAssignActionType,
+    hoveredWaypointId,
+    setBulkAssignActionType,
+    setHoveredWaypoint,
+    stage,
+  ])
+
+  useEffect(() => {
+    if (!isBulkAssignActive(bulkAssignActionType)) {
+      return
+    }
+
+    setBulkAssignActionType(null)
+  }, [bulkAssignActionType, selectedPattern, setBulkAssignActionType])
+
+  useEffect(() => {
+    if (
+      stage !== 'generated' ||
+      startWaypointId === null ||
+      !waypointInteractionModel.didFallbackToAutoStart
+    ) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setStartWaypoint(null)
+      setInteractionNotice({
+        tone: 'warning',
+        message:
+          'Start point reset to Waypoint 1 because the previous start no longer exists or is not valid for this path.',
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [
+    setStartWaypoint,
+    stage,
+    startWaypointId,
+    waypointInteractionModel.didFallbackToAutoStart,
+  ])
 
   useEffect(() => {
     if (viewportAnimationState !== 'animating') {
@@ -598,7 +687,7 @@ function App() {
               scanAltitude={scanAltitude}
               points={points}
               patternSegments={patternSegments}
-              waypoints={waypoints}
+              waypoints={orderedWaypoints}
               selectedWaypointId={selectedWaypointId}
               selectedPattern={selectedPattern}
               hoveredPattern={hoveredPattern}
@@ -612,6 +701,7 @@ function App() {
               onReadyToCloseChange={setIsReadyToClose}
               onPatternPickerAnchorChange={setPatternPickerAnchor}
               onAnimationStateChange={setViewportAnimationState}
+              onHoveredWaypointChange={setHoveredWaypoint}
             />
 
             {viewportAnimationState === 'animating' && (
@@ -1265,13 +1355,21 @@ function App() {
                       scanAltitude,
                       lineSpacing,
                       orientation,
-                      waypointCount: waypoints.length,
+                      waypointCount: orderedWaypoints.length,
                       waypointsWithActions,
                       totalWaypointActions,
                       area,
                       meta: selectedPatternMeta,
                     })}
                   </p>
+                  {orderedWaypoints.length > 0 && (
+                    <div className="generated-route-order-note">
+                      Start WP {effectiveStartWaypointId ?? orderedWaypoints[0].id} ·{' '}
+                      {isClosedMissionLoop
+                        ? 'Closed loop'
+                        : `End WP ${missionEndWaypointId ?? '—'}`}
+                    </div>
+                  )}
                   {selectedWaypoint && (
                     <div className="selected-waypoint-summary">
                       Selected WP {selectedWaypoint.id} · X{' '}
@@ -1291,7 +1389,7 @@ function App() {
               <div className="section-title section-title-muted">
                 <Plane size={15} strokeWidth={2.1} />
                 <span>
-                  Vehicle Behavior{stage === 'generated' ? ` (${waypoints.length})` : ''}
+                  Vehicle Behavior{stage === 'generated' ? ` (${orderedWaypoints.length})` : ''}
                 </span>
               </div>
               {stage === 'generated' ? (
@@ -1316,13 +1414,13 @@ function App() {
                   <div className="behavior-overview-copy">
                     <strong>{selectedPatternOption.shortLabel}</strong>
                     <span>
-                      {waypoints.length} waypoints · {waypointsWithActions} action nodes ·{' '}
+                      {orderedWaypoints.length} waypoints · {waypointsWithActions} action nodes ·{' '}
                       {totalWaypointActions} actions
                     </span>
                   </div>
                 </div>
 
-                {waypoints.map((waypoint) => (
+                {orderedWaypoints.map((waypoint) => (
                   <WaypointBehaviorRow
                     key={waypoint.id}
                     waypoint={waypoint}

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import {
+  cloneWaypointAction,
   createDefaultWaypointAction,
   patchWaypointAction,
   type MissionWaypointAction,
@@ -35,6 +36,9 @@ interface MissionState {
   points: MissionPoint[]
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
+  startWaypointId: number | null
+  hoveredWaypointId: number | null
+  bulkAssignActionType: MissionWaypointActionType | null
   setOperationMode: (mode: OperationMode) => void
   setEditorTab: (tab: EditorTab) => void
   setScanAltitude: (value: number) => void
@@ -52,7 +56,16 @@ interface MissionState {
   addPoint: (x: number, y: number) => void
   updatePoint: (id: number, x: number, y: number) => void
   selectWaypoint: (id: number | null) => void
+  setStartWaypoint: (id: number | null) => void
+  setHoveredWaypoint: (id: number | null) => void
+  setBulkAssignActionType: (type: MissionWaypointActionType | null) => void
   addWaypointAction: (waypointId: number, type: MissionWaypointActionType) => void
+  duplicateWaypointAction: (waypointId: number, actionId: number) => void
+  applyWaypointActionToTargets: (
+    sourceWaypointId: number,
+    actionId: number,
+    targetWaypointIds: number[],
+  ) => void
   updateWaypointAction: (
     waypointId: number,
     actionId: number,
@@ -80,6 +93,9 @@ const initialState = {
   points: [] as MissionPoint[],
   waypoints: [] as MissionWaypoint[],
   selectedWaypointId: null as number | null,
+  startWaypointId: null as number | null,
+  hoveredWaypointId: null as number | null,
+  bulkAssignActionType: null as MissionWaypointActionType | null,
 }
 
 export const useMissionStore = create<MissionState>((set) => ({
@@ -89,29 +105,90 @@ export const useMissionStore = create<MissionState>((set) => ({
   setScanAltitude: (value) => set({ scanAltitude: value }),
   setLineSpacing: (value) => set({ lineSpacing: value }),
   setOrientation: (value) => set({ orientation: value }),
-  enterSetup: () => set({ stage: 'setup', points: [], waypoints: [], selectedWaypointId: null }),
-  cancelSetup: () => set({ stage: 'idle', points: [], waypoints: [], selectedWaypointId: null }),
-  startDrawing: () => set({ stage: 'drawing', points: [], waypoints: [], selectedWaypointId: null }),
-  cancelDrawing: () => set({ stage: 'setup', points: [], waypoints: [], selectedWaypointId: null }),
+  enterSetup: () =>
+    set({
+      stage: 'setup',
+      points: [],
+      waypoints: [],
+      selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    }),
+  cancelSetup: () =>
+    set({
+      stage: 'idle',
+      points: [],
+      waypoints: [],
+      selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    }),
+  startDrawing: () =>
+    set({
+      stage: 'drawing',
+      points: [],
+      waypoints: [],
+      selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    }),
+  cancelDrawing: () =>
+    set({
+      stage: 'setup',
+      points: [],
+      waypoints: [],
+      selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    }),
   closePolygon: () =>
     set((state) =>
       state.points.length >= 3
-        ? { stage: 'editing', waypoints: [], selectedWaypointId: null }
+        ? {
+            stage: 'editing',
+            waypoints: [],
+            selectedWaypointId: null,
+            startWaypointId: null,
+            hoveredWaypointId: null,
+            bulkAssignActionType: null,
+          }
         : state,
     ),
   generatePath: (waypoints) =>
-    set({
+    set((state) => ({
       stage: 'generated',
       waypoints,
       selectedWaypointId: null,
-    }),
+      startWaypointId: waypoints.some(
+        (waypoint) => waypoint.id === state.startWaypointId,
+      )
+        ? state.startWaypointId
+        : null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    })),
   editGeneratedPath: () =>
     set({
       stage: 'editing',
       waypoints: [],
       selectedWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
     }),
-  redrawMission: () => set({ stage: 'drawing', points: [], waypoints: [], selectedWaypointId: null }),
+  redrawMission: () =>
+    set({
+      stage: 'drawing',
+      points: [],
+      waypoints: [],
+      selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
+    }),
   resetMission: () =>
     set({
       ...initialState,
@@ -121,6 +198,9 @@ export const useMissionStore = create<MissionState>((set) => ({
       points: [...state.points, { id: state.points.length + 1, x, y }],
       waypoints: [],
       selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
     })),
   updatePoint: (id, x, y) =>
     set((state) => ({
@@ -129,8 +209,14 @@ export const useMissionStore = create<MissionState>((set) => ({
       ),
       waypoints: [],
       selectedWaypointId: null,
+      startWaypointId: null,
+      hoveredWaypointId: null,
+      bulkAssignActionType: null,
     })),
   selectWaypoint: (id) => set({ selectedWaypointId: id }),
+  setStartWaypoint: (id) => set({ startWaypointId: id }),
+  setHoveredWaypoint: (id) => set({ hoveredWaypointId: id }),
+  setBulkAssignActionType: (type) => set({ bulkAssignActionType: type }),
   addWaypointAction: (waypointId, type) =>
     set((state) => ({
       waypoints: state.waypoints.map((waypoint) => {
@@ -153,6 +239,71 @@ export const useMissionStore = create<MissionState>((set) => ({
         }
       }),
     })),
+  duplicateWaypointAction: (waypointId, actionId) =>
+    set((state) => ({
+      waypoints: state.waypoints.map((waypoint) => {
+        if (waypoint.id !== waypointId) {
+          return waypoint
+        }
+
+        const actionToDuplicate = waypoint.actions.find(
+          (action) => action.id === actionId,
+        )
+
+        if (!actionToDuplicate) {
+          return waypoint
+        }
+
+        const nextActionId =
+          waypoint.actions.reduce(
+            (highest, action) => Math.max(highest, action.id),
+            0,
+          ) + 1
+
+        return {
+          ...waypoint,
+          actions: [
+            ...waypoint.actions,
+            cloneWaypointAction(actionToDuplicate, nextActionId),
+          ],
+        }
+      }),
+    })),
+  applyWaypointActionToTargets: (sourceWaypointId, actionId, targetWaypointIds) =>
+    set((state) => {
+      const sourceWaypoint = state.waypoints.find(
+        (waypoint) => waypoint.id === sourceWaypointId,
+      )
+      const sourceAction = sourceWaypoint?.actions.find(
+        (action) => action.id === actionId,
+      )
+
+      if (!sourceAction) {
+        return state
+      }
+
+      return {
+        waypoints: state.waypoints.map((waypoint) => {
+          if (!targetWaypointIds.includes(waypoint.id)) {
+            return waypoint
+          }
+
+          const nextActionId =
+            waypoint.actions.reduce(
+              (highest, action) => Math.max(highest, action.id),
+              0,
+            ) + 1
+
+          return {
+            ...waypoint,
+            actions: [
+              ...waypoint.actions,
+              cloneWaypointAction(sourceAction, nextActionId),
+            ],
+          }
+        }),
+      }
+    }),
   updateWaypointAction: (waypointId, actionId, patch) =>
     set((state) => ({
       waypoints: state.waypoints.map((waypoint) =>

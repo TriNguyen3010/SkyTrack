@@ -257,6 +257,30 @@ export function patchWaypointAction(
   }
 }
 
+export function cloneWaypointAction(
+  action: MissionWaypointAction,
+  id: number,
+): MissionWaypointAction {
+  switch (action.type) {
+    case 'hover':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'take_photo':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'record_video':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'drop_payload':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'fire_suppress':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'change_altitude':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'set_gimbal':
+      return { id, type: action.type, config: { ...action.config } }
+    case 'trigger_sensor':
+      return { id, type: action.type, config: { ...action.config } }
+  }
+}
+
 export function validateWaypointAction(action: MissionWaypointAction): string[] {
   switch (action.type) {
     case 'hover':
