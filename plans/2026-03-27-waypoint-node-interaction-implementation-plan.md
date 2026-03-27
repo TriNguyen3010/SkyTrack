@@ -201,6 +201,8 @@ Status: implemented, pending visual/runtime verification. Right-click on a gener
 
 ### Stream E: Start Node Semantics + Visual Markers
 
+Status: implemented, build/lint passed. Generated flow now exposes `Start Point` control in the sidebar, radial menu center action can set mission start immediately, ordered route semantics drive `START` / `END` markers in the viewport, and sidebar rows highlight start/end state without mutating the underlying waypoint ids.
+
 #### Scope
 
 - thêm UI set start:
@@ -294,5 +296,5 @@ Lý do:
 - [x] Stream B: Quick action radial menu
 - [ ] Stream C: Bulk assign + viewport/sidebar sync
 - [ ] Stream D: Sidebar action panel upgrade
-- [ ] Stream E: Start node semantics + visual markers
+- [x] Stream E: Start node semantics + visual markers
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Waypoint Node Interaction Spec

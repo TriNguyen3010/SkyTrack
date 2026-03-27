@@ -383,21 +383,44 @@
   justify-content: center;
   gap: 4px;
   text-align: center;
-  pointer-events: none;
+  color: #1f2937;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.waypoint-radial-core:hover {
+  transform: translate(-50%, -50%) scale(1.02);
+  border-color: rgba(108, 92, 231, 0.28);
+  box-shadow: 0 14px 28px rgba(108, 92, 231, 0.14);
+}
+
+.waypoint-radial-core.is-active {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: rgba(236, 253, 245, 0.98);
+}
+
+.waypoint-radial-core.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.76;
 }
 
 .waypoint-radial-core strong {
-  color: #1f2937;
+  color: inherit;
   font-size: 16px;
   line-height: 1;
 }
 
 .waypoint-radial-core span {
-  color: #64748b;
+  color: inherit;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  opacity: 0.82;
 }
 
 .waypoint-radial-item {
@@ -1054,6 +1077,49 @@
   line-height: 1.4;
 }
 
+.generated-start-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(108, 92, 231, 0.1);
+  border-radius: 12px;
+  background: rgba(245, 243, 255, 0.54);
+  padding: 12px;
+}
+
+.generated-start-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.generated-start-copy strong {
+  color: #374151;
+  font-size: 13px;
+}
+
+.generated-start-copy span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.generated-start-select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #d8deef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 12px;
+}
+
 .selected-waypoint-summary {
   border-radius: 10px;
   background: rgba(108, 92, 231, 0.09);
@@ -1253,6 +1319,11 @@
   box-shadow: 0 8px 24px rgba(108, 92, 231, 0.1);
 }
 
+.waypoint-row.is-start {
+  border-color: rgba(16, 185, 129, 0.24);
+  background: linear-gradient(180deg, rgba(236, 253, 245, 0.84) 0%, #ffffff 100%);
+}
+
 .waypoint-row-top {
   display: flex;
   align-items: center;
@@ -1275,6 +1346,10 @@
 
 .waypoint-row.is-selected .waypoint-index {
   background: var(--brand-primary);
+}
+
+.waypoint-row.is-start .waypoint-index {
+  background: #10b981;
 }
 
 .waypoint-copy {
@@ -1316,6 +1391,23 @@
   color: #c2410c;
   font-size: 11px;
   font-weight: 700;
+}
+
+.waypoint-status-pill {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.waypoint-status-pill.is-start {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+}
+
+.waypoint-status-pill.is-end {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
 }
 
 .waypoint-coordinates {
@@ -1644,6 +1736,10 @@
   }
 
   .pattern-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .generated-start-control {
     grid-template-columns: 1fr;
   }
 }

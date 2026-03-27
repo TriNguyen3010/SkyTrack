@@ -69,6 +69,7 @@ import {
   type WaypointActionPatch,
 } from './lib/waypointActions'
 import {
+  canSetStartWaypoint,
   deriveWaypointInteractionModel,
   getWaypointValidationWarnings,
   isBulkAssignActive,
@@ -234,6 +235,10 @@ function App() {
   const effectiveStartWaypointId = waypointInteractionModel.effectiveStartWaypointId
   const missionEndWaypointId = waypointInteractionModel.endWaypointId
   const isClosedMissionLoop = waypointInteractionModel.isClosedLoop
+  const displayStartWaypointId = orderedWaypoints[0]?.id ?? null
+  const displayEndWaypointId = isClosedMissionLoop
+    ? displayStartWaypointId
+    : missionEndWaypointId
   const area = useMemo(() => polygonArea(points), [points])
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
@@ -271,10 +276,7 @@ function App() {
     [effectiveStartWaypointId, selectedWaypoint],
   )
   const activeNotice =
-    interactionNotice &&
-    (stage === 'setup' || stage === 'drawing' || stage === 'editing')
-      ? interactionNotice
-      : null
+    interactionNotice && stage !== 'idle' ? interactionNotice : null
 
   const radialMenuWaypoint = useMemo(
     () =>
@@ -290,6 +292,28 @@ function App() {
         radialMenuWaypoint?.actions.map((action) => action.type) ?? [],
       ),
     [radialMenuWaypoint],
+  )
+  const canRadialWaypointBeStart = useMemo(
+    () =>
+      radialMenuWaypoint
+        ? canSetStartWaypoint(selectedPattern, radialMenuWaypoint.id, waypoints)
+        : false,
+    [radialMenuWaypoint, selectedPattern, waypoints],
+  )
+  const isRadialWaypointStart =
+    radialMenuWaypoint !== null && radialMenuWaypoint.id === displayStartWaypointId
+  const startWaypointOptions = useMemo(
+    () =>
+      getStartWaypointOptions({
+        allowedStartWaypointIds: waypointInteractionModel.allowedStartWaypointIds,
+        waypoints,
+        isClosedLoop: isClosedMissionLoop,
+      }),
+    [
+      isClosedMissionLoop,
+      waypointInteractionModel.allowedStartWaypointIds,
+      waypoints,
+    ],
   )
 
   function dismissPatternPicker() {
@@ -738,6 +762,58 @@ function App() {
     setActionEditorFocusToken((current) => current + 1)
   }
 
+  function handleSetStartWaypointSelection(
+    waypointId: number | null,
+    origin: 'sidebar' | 'radial',
+  ) {
+    if (waypointId === null) {
+      clearInteractionNotice()
+      setStartWaypoint(null)
+
+      if (origin === 'radial') {
+        dismissWaypointRadialMenu()
+      }
+
+      return
+    }
+
+    if (!canSetStartWaypoint(selectedPattern, waypointId, waypoints)) {
+      setInteractionNotice({
+        tone: 'warning',
+        message: getBlockedStartWaypointMessage(isClosedMissionLoop),
+      })
+
+      if (origin === 'radial') {
+        dismissWaypointRadialMenu()
+      }
+
+      return
+    }
+
+    clearInteractionNotice()
+    setStartWaypoint(waypointId)
+    selectWaypoint(waypointId)
+
+    if (origin === 'radial') {
+      dismissWaypointRadialMenu()
+    }
+  }
+
+  function handleStartWaypointDropdownChange(value: string) {
+    if (value === 'auto') {
+      handleSetStartWaypointSelection(null, 'sidebar')
+      return
+    }
+
+    const nextWaypointId = Number(value)
+
+    if (Number.isNaN(nextWaypointId)) {
+      return
+    }
+
+    handleSetStartWaypointSelection(nextWaypointId, 'sidebar')
+  }
+
   const viewportHint = activeNotice?.message
     ? activeNotice.message
     : viewportAnimationState === 'animating'
@@ -937,10 +1013,37 @@ function App() {
                     top: `${waypointRadialMenuPosition.top}px`,
                   }}
                 >
-                  <div className="waypoint-radial-core">
-                    <strong>WP {radialMenuWaypoint.id}</strong>
-                    <span>Quick Action</span>
-                  </div>
+                  <button
+                    type="button"
+                    className={`waypoint-radial-core ${
+                      isRadialWaypointStart ? 'is-active' : ''
+                    } ${!canRadialWaypointBeStart ? 'is-disabled' : ''}`}
+                    onClick={() =>
+                      handleSetStartWaypointSelection(radialMenuWaypoint.id, 'radial')
+                    }
+                    title={
+                      canRadialWaypointBeStart
+                        ? isClosedMissionLoop
+                          ? 'Rotate mission loop to start from this waypoint'
+                          : 'Use this endpoint as the mission start'
+                        : getBlockedStartWaypointMessage(isClosedMissionLoop)
+                    }
+                  >
+                    <strong>
+                      {isRadialWaypointStart
+                        ? `Start WP ${radialMenuWaypoint.id}`
+                        : `WP ${radialMenuWaypoint.id}`}
+                    </strong>
+                    <span>
+                      {isRadialWaypointStart
+                        ? 'Mission entry'
+                        : canRadialWaypointBeStart
+                          ? isClosedMissionLoop
+                            ? 'Set loop start'
+                            : 'Set as start'
+                          : 'Use path ends'}
+                    </span>
+                  </button>
 
                   {getWaypointRadialItems().map((item) => (
                     <button
@@ -1552,10 +1655,38 @@ function App() {
                   </p>
                   {orderedWaypoints.length > 0 && (
                     <div className="generated-route-order-note">
-                      Start WP {effectiveStartWaypointId ?? orderedWaypoints[0].id} ·{' '}
+                      Start WP {displayStartWaypointId ?? orderedWaypoints[0].id} ·{' '}
                       {isClosedMissionLoop
                         ? 'Closed loop'
                         : `End WP ${missionEndWaypointId ?? '—'}`}
+                    </div>
+                  )}
+                  {orderedWaypoints.length > 0 && (
+                    <div className="generated-start-control">
+                      <div className="generated-start-copy">
+                        <strong>Start Point</strong>
+                        <span>{getStartWaypointControlHelp(isClosedMissionLoop)}</span>
+                      </div>
+                      <select
+                        className="generated-start-select"
+                        value={startWaypointId === null ? 'auto' : `${startWaypointId}`}
+                        onChange={(event) =>
+                          handleStartWaypointDropdownChange(event.target.value)
+                        }
+                      >
+                        <option value="auto">
+                          Auto (
+                          {displayStartWaypointId !== null
+                            ? `WP ${displayStartWaypointId}`
+                            : '—'}
+                          )
+                        </option>
+                        {startWaypointOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   )}
                   {selectedWaypoint && (
@@ -1613,6 +1744,11 @@ function App() {
                     key={waypoint.id}
                     waypoint={waypoint}
                     isSelected={selectedWaypointId === waypoint.id}
+                    isStartNode={displayStartWaypointId === waypoint.id}
+                    isEndNode={
+                      !isClosedMissionLoop && displayEndWaypointId === waypoint.id
+                    }
+                    isClosedLoop={isClosedMissionLoop}
                     onSelect={selectWaypoint}
                   />
                 ))}
@@ -1779,10 +1915,16 @@ function VertexRow({ point }: { point: MissionPoint }) {
 function WaypointBehaviorRow({
   waypoint,
   isSelected,
+  isStartNode,
+  isEndNode,
+  isClosedLoop,
   onSelect,
 }: {
   waypoint: MissionWaypoint
   isSelected: boolean
+  isStartNode: boolean
+  isEndNode: boolean
+  isClosedLoop: boolean
   onSelect: (id: number) => void
 }) {
   const actionSummary = summarizeWaypointActionStack(waypoint.actions)
@@ -1790,7 +1932,9 @@ function WaypointBehaviorRow({
   return (
     <button
       type="button"
-      className={`waypoint-row ${isSelected ? 'is-selected' : ''}`}
+      className={`waypoint-row ${isSelected ? 'is-selected' : ''} ${
+        isStartNode ? 'is-start' : ''
+      }`}
       onClick={() => onSelect(waypoint.id)}
     >
       <div className="waypoint-row-top">
@@ -1799,6 +1943,14 @@ function WaypointBehaviorRow({
           <strong>Navigate to waypoint</strong>
           <div className="waypoint-row-meta">
             <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
+            {isStartNode && (
+              <span className="waypoint-status-pill is-start">
+                {isClosedLoop ? 'Start / Return' : 'Start Node'}
+              </span>
+            )}
+            {isEndNode && (
+              <span className="waypoint-status-pill is-end">End Node</span>
+            )}
             {waypoint.actions.length > 0 && (
               <span className="waypoint-action-pill">
                 {waypoint.actions.length} action
@@ -2339,6 +2491,63 @@ function getWaypointRadialItems(): Array<{
     x: positionByType[option.type].x,
     y: positionByType[option.type].y,
   }))
+}
+
+function getStartWaypointOptions({
+  allowedStartWaypointIds,
+  waypoints,
+  isClosedLoop,
+}: {
+  allowedStartWaypointIds: number[]
+  waypoints: MissionWaypoint[]
+  isClosedLoop: boolean
+}): Array<{ value: string; label: string }> {
+  if (allowedStartWaypointIds.length === 0) {
+    return []
+  }
+
+  const rawStartWaypointId = waypoints[0]?.id ?? null
+  const rawEndWaypointId = waypoints[waypoints.length - 1]?.id ?? null
+
+  return allowedStartWaypointIds.map((waypointId) => {
+    if (isClosedLoop) {
+      return {
+        value: `${waypointId}`,
+        label: `WP ${waypointId} · Rotate loop`,
+      }
+    }
+
+    if (waypointId === rawStartWaypointId) {
+      return {
+        value: `${waypointId}`,
+        label: `WP ${waypointId} · Forward path`,
+      }
+    }
+
+    if (waypointId === rawEndWaypointId) {
+      return {
+        value: `${waypointId}`,
+        label: `WP ${waypointId} · Reverse path`,
+      }
+    }
+
+    return {
+      value: `${waypointId}`,
+      label: `WP ${waypointId}`,
+    }
+  })
+}
+
+function getStartWaypointControlHelp(isClosedLoop: boolean): string {
+  return isClosedLoop
+    ? 'Closed loops can rotate to start from any waypoint.'
+    : 'Open paths can only start from either endpoint.'
+}
+
+function getBlockedStartWaypointMessage(isClosedLoop: boolean): string {
+  return isClosedLoop
+    ? 'This loop can rotate from any waypoint after generation.'
+    : 'Only the first or last waypoint can become the mission start for this path.'
 }
 
 function clampValue(value: number, min: number, max: number): number {

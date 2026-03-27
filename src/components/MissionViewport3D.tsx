@@ -20,6 +20,7 @@ import {
   polygonCentroid,
   type Vec2,
 } from '../lib/missionGeometry'
+import { getStartWaypointPolicy } from '../lib/waypointInteraction'
 import type {
   MissionPoint,
   MissionStage,
@@ -669,10 +670,21 @@ function MissionWorld({
     () => buildWaypointSegments(revealedWaypoints),
     [revealedWaypoints],
   )
+  const routeDirectionChevrons = useMemo(
+    () => buildRouteDirectionChevrons(revealedRouteSegments, scanAltitude),
+    [revealedRouteSegments, scanAltitude],
+  )
   const selectedWaypoint =
     selectedWaypointId === null
       ? null
       : waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null
+  const isClosedLoopPattern =
+    getStartWaypointPolicy(selectedPattern) === 'closed-rotatable'
+  const startWaypointId = waypoints[0]?.id ?? null
+  const endWaypointId =
+    !isClosedLoopPattern && waypoints.length > 1
+      ? waypoints[waypoints.length - 1]?.id ?? null
+      : null
 
   const flightAnchor = useMemo(() => {
     if (selectedWaypoint) {
@@ -1000,6 +1012,18 @@ function MissionWorld({
         />
       )}
 
+      {stage === 'generated' &&
+        routeDirectionChevrons.map((chevron, index) => (
+          <Line
+            key={`route-chevron-${index}`}
+            points={chevron}
+            color={selectedPatternColor}
+            transparent
+            opacity={0.58}
+            lineWidth={1.6}
+          />
+        ))}
+
       {stage === 'generated' && (
         <PatternVisualPolish
           pattern={selectedPattern}
@@ -1089,6 +1113,8 @@ function MissionWorld({
         revealedWaypoints.map((waypoint) => {
           const isSelected = waypoint.id === selectedWaypointId
           const actionCount = waypoint.actions.length
+          const isStartWaypoint = waypoint.id === startWaypointId
+          const isEndWaypoint = waypoint.id === endWaypointId
 
           return (
             <group
@@ -1124,6 +1150,13 @@ function MissionWorld({
                 })
               }}
             >
+              {isStartWaypoint && (
+                <mesh rotation-x={-Math.PI / 2} position={[0, 0.3, 0]}>
+                  <ringGeometry args={[3.2, 3.9, 36]} />
+                  <meshBasicMaterial color="#10b981" transparent opacity={0.92} />
+                </mesh>
+              )}
+
               <mesh>
                 <sphereGeometry args={[isSelected ? 2.7 : 2.3, 28, 28]} />
                 <meshStandardMaterial color="#ffffff" />
@@ -1152,6 +1185,42 @@ function MissionWorld({
                   {waypoint.id}
                 </Text>
               </Billboard>
+
+              {isStartWaypoint && (
+                <Billboard position={[0, 14.2, 0]} follow>
+                  <mesh>
+                    <planeGeometry args={[14, 4.3]} />
+                    <meshBasicMaterial color="#10b981" transparent opacity={0.98} />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={2.1}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    START
+                  </Text>
+                </Billboard>
+              )}
+
+              {isEndWaypoint && (
+                <Billboard position={[0, 14.2, 0]} follow>
+                  <mesh>
+                    <planeGeometry args={[11.2, 4.1]} />
+                    <meshBasicMaterial color="#3b82f6" transparent opacity={0.96} />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={2.1}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    END
+                  </Text>
+                </Billboard>
+              )}
 
               {actionCount > 0 && (
                 <Billboard position={[5.5, 4.8, 0]} follow>
@@ -2326,6 +2395,57 @@ function buildWaypointSegments(
     { x: waypoints[index].x, y: waypoints[index].y },
     { x: waypoint.x, y: waypoint.y },
   ])
+}
+
+function buildRouteDirectionChevrons(
+  segments: Array<[Vec2, Vec2]>,
+  altitude: number,
+): ScenePoint[][] {
+  if (segments.length === 0) {
+    return []
+  }
+
+  const step = Math.max(1, Math.floor(segments.length / 7))
+  const chevrons: ScenePoint[][] = []
+
+  for (let index = 0; index < segments.length; index += step) {
+    const [start, end] = segments[index]
+    const length = distanceBetween2D(start, end)
+
+    if (length < 8) {
+      continue
+    }
+
+    const direction = {
+      x: (end.x - start.x) / length,
+      y: (end.y - start.y) / length,
+    }
+    const normal = {
+      x: -direction.y,
+      y: direction.x,
+    }
+    const tip = lerpPoint(start, end, 0.58)
+    const base = {
+      x: tip.x - direction.x * 4.8,
+      y: tip.y - direction.y * 4.8,
+    }
+    const left = {
+      x: base.x + normal.x * 2.2,
+      y: base.y + normal.y * 2.2,
+    }
+    const right = {
+      x: base.x - normal.x * 2.2,
+      y: base.y - normal.y * 2.2,
+    }
+
+    chevrons.push([
+      toAltitudePlanePosition(left, altitude, ALTITUDE_LINE_OFFSET + 0.05),
+      toAltitudePlanePosition(tip, altitude, ALTITUDE_LINE_OFFSET + 0.05),
+      toAltitudePlanePosition(right, altitude, ALTITUDE_LINE_OFFSET + 0.05),
+    ])
+  }
+
+  return chevrons.slice(0, 8)
 }
 
 function buildOrderedPathFromSegments(
