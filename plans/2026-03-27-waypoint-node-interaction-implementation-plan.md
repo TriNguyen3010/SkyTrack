@@ -161,6 +161,8 @@ Status: implemented, pending visual/runtime verification. Right-click on a gener
 
 ### Stream C: Bulk Assign + Viewport/Sidebar Sync
 
+Status: implemented, build/lint passed. `Shift + click` on a radial action now enters bulk assign mode, the viewport banner explains the active action and exit gestures, waypoint click in generated mode can append that action repeatedly, and `hoveredWaypointId` now drives two-way sync between viewport glow and sidebar row reveal.
+
 #### Scope
 
 - `Shift + click` vào sector trong radial menu → vào bulk assign mode
@@ -294,7 +296,7 @@ Lý do:
 
 - [x] Stream A: Waypoint interaction foundation
 - [x] Stream B: Quick action radial menu
-- [ ] Stream C: Bulk assign + viewport/sidebar sync
+- [x] Stream C: Bulk assign + viewport/sidebar sync
 - [ ] Stream D: Sidebar action panel upgrade
 - [x] Stream E: Start node semantics + visual markers
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Waypoint Node Interaction Spec

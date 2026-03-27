@@ -169,6 +169,8 @@ function App() {
   const patternPickerRef = useRef<HTMLDivElement | null>(null)
   const waypointRadialMenuRef = useRef<HTMLDivElement | null>(null)
   const waypointActionEditorRef = useRef<HTMLDivElement | null>(null)
+  const behaviorListRef = useRef<HTMLDivElement | null>(null)
+  const waypointRowRefs = useRef(new Map<number, HTMLButtonElement | null>())
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
   const selectedPatternOption = useMemo(
@@ -293,6 +295,9 @@ function App() {
       ),
     [radialMenuWaypoint],
   )
+  const bulkAssignActionLabel = bulkAssignActionType
+    ? getWaypointActionLabel(bulkAssignActionType)
+    : null
   const canRadialWaypointBeStart = useMemo(
     () =>
       radialMenuWaypoint
@@ -505,11 +510,63 @@ function App() {
 
   useEffect(() => {
     if (!isBulkAssignActive(bulkAssignActionType)) {
-      return
+      return undefined
     }
 
     setBulkAssignActionType(null)
+    return undefined
   }, [bulkAssignActionType, selectedPattern, setBulkAssignActionType])
+
+  useEffect(() => {
+    if (!isBulkAssignActive(bulkAssignActionType)) {
+      return undefined
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setBulkAssignActionType(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [bulkAssignActionType, setBulkAssignActionType])
+
+  useEffect(() => {
+    if (stage !== 'generated' || hoveredWaypointId === null) {
+      return undefined
+    }
+
+    const container = behaviorListRef.current
+    const row = waypointRowRefs.current.get(hoveredWaypointId)
+
+    if (!container || !row) {
+      return undefined
+    }
+
+    const containerRect = container.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const isAboveViewport = rowRect.top < containerRect.top + 8
+    const isBelowViewport = rowRect.bottom > containerRect.bottom - 8
+
+    if (!isAboveViewport && !isBelowViewport) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      row.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [hoveredWaypointId, stage])
 
   useEffect(() => {
     if (
@@ -750,8 +807,19 @@ function App() {
     })
   }
 
-  function handleQuickAddWaypointAction(type: MissionWaypointActionType) {
+  function handleQuickAddWaypointAction(
+    type: MissionWaypointActionType,
+    enableBulkAssign = false,
+  ) {
     if (!radialMenuWaypoint) {
+      return
+    }
+
+    if (enableBulkAssign) {
+      clearInteractionNotice()
+      setPendingActionType(type)
+      setBulkAssignActionType(type)
+      dismissWaypointRadialMenu()
       return
     }
 
@@ -760,6 +828,16 @@ function App() {
     selectWaypoint(radialMenuWaypoint.id)
     dismissWaypointRadialMenu()
     setActionEditorFocusToken((current) => current + 1)
+  }
+
+  function handleApplyBulkAssign(waypointId: number) {
+    if (!bulkAssignActionType) {
+      return
+    }
+
+    clearInteractionNotice()
+    addWaypointAction(waypointId, bulkAssignActionType)
+    setHoveredWaypoint(waypointId)
   }
 
   function handleSetStartWaypointSelection(
@@ -816,6 +894,8 @@ function App() {
 
   const viewportHint = activeNotice?.message
     ? activeNotice.message
+    : bulkAssignActionLabel
+      ? `Bulk assign: ${bulkAssignActionLabel} · click waypoint to apply · Esc or right-click to exit`
     : viewportAnimationState === 'animating'
       ? 'Animating path preview · click or press Space to skip'
       : stage === 'setup'
@@ -841,6 +921,13 @@ function App() {
     waypointRadialMenu?.anchor ?? null,
     viewportStageSize,
   )
+  const viewportHintClassName = `viewport-hint ${
+    activeNotice
+      ? `is-${activeNotice.tone}`
+      : bulkAssignActionLabel
+        ? 'is-bulk'
+        : ''
+  }`
 
   return (
     <main className="app-shell">
@@ -888,17 +975,19 @@ function App() {
               stage === 'setup' || stage === 'drawing' ? 'is-drawing' : ''
             } ${stage === 'drawing' && isReadyToClose ? 'is-ready-to-close' : ''}`}
             onContextMenu={(event) => {
+              if (isBulkAssignActive(bulkAssignActionType)) {
+                event.preventDefault()
+                setBulkAssignActionType(null)
+                return
+              }
+
               if (stage === 'generated' || waypointRadialMenu) {
                 event.preventDefault()
               }
             }}
           >
             {viewportHint && (
-              <div
-                className={`viewport-hint ${
-                  activeNotice ? `is-${activeNotice.tone}` : ''
-                }`}
-              >
+              <div className={viewportHintClassName}>
                 <span className="hint-dot" />
                 {viewportHint}
               </div>
@@ -915,12 +1004,16 @@ function App() {
               hoveredPattern={hoveredPattern}
               patternPickerVisible={patternPickerVisible}
               waypointContextMenuVisible={waypointRadialMenu !== null}
+              hoveredWaypointId={hoveredWaypointId}
+              bulkAssignActionType={bulkAssignActionType}
               skipAnimationToken={skipAnimationToken}
               onStartDrawing={startDrawing}
               onAddPoint={handleAddPoint}
               onUpdatePoint={handleUpdatePoint}
               onClosePolygon={handleClosePolygon}
               onSelectWaypoint={selectWaypoint}
+              onBulkAssignWaypoint={handleApplyBulkAssign}
+              onExitBulkAssign={() => setBulkAssignActionType(null)}
               onReadyToCloseChange={setIsReadyToClose}
               onPatternPickerAnchorChange={setPatternPickerAnchor}
               onAnimationStateChange={setViewportAnimationState}
@@ -1054,7 +1147,9 @@ function App() {
                         left: `${item.x}%`,
                         top: `${item.y}%`,
                       }}
-                      onClick={() => handleQuickAddWaypointAction(item.type)}
+                      onClick={(event) =>
+                        handleQuickAddWaypointAction(item.type, event.shiftKey)
+                      }
                       title={item.description}
                     >
                       <span className="waypoint-radial-icon">
@@ -1725,7 +1820,7 @@ function App() {
             </header>
 
             {stage === 'generated' ? (
-              <div className="behavior-list">
+              <div ref={behaviorListRef} className="behavior-list">
                 <div className="behavior-overview">
                   <div className="behavior-overview-icon">
                     <Route size={16} strokeWidth={2.2} />
@@ -1744,11 +1839,16 @@ function App() {
                     key={waypoint.id}
                     waypoint={waypoint}
                     isSelected={selectedWaypointId === waypoint.id}
+                    isHovered={hoveredWaypointId === waypoint.id}
                     isStartNode={displayStartWaypointId === waypoint.id}
                     isEndNode={
                       !isClosedMissionLoop && displayEndWaypointId === waypoint.id
                     }
                     isClosedLoop={isClosedMissionLoop}
+                    onHoverChange={setHoveredWaypoint}
+                    onRegisterRow={(node) => {
+                      waypointRowRefs.current.set(waypoint.id, node)
+                    }}
                     onSelect={selectWaypoint}
                   />
                 ))}
@@ -1915,26 +2015,37 @@ function VertexRow({ point }: { point: MissionPoint }) {
 function WaypointBehaviorRow({
   waypoint,
   isSelected,
+  isHovered,
   isStartNode,
   isEndNode,
   isClosedLoop,
+  onHoverChange,
+  onRegisterRow,
   onSelect,
 }: {
   waypoint: MissionWaypoint
   isSelected: boolean
+  isHovered: boolean
   isStartNode: boolean
   isEndNode: boolean
   isClosedLoop: boolean
+  onHoverChange: (id: number | null) => void
+  onRegisterRow: (node: HTMLButtonElement | null) => void
   onSelect: (id: number) => void
 }) {
   const actionSummary = summarizeWaypointActionStack(waypoint.actions)
 
   return (
     <button
+      ref={onRegisterRow}
       type="button"
       className={`waypoint-row ${isSelected ? 'is-selected' : ''} ${
+        isHovered ? 'is-hovered' : ''
+      } ${
         isStartNode ? 'is-start' : ''
       }`}
+      onMouseEnter={() => onHoverChange(waypoint.id)}
+      onMouseLeave={() => onHoverChange(null)}
       onClick={() => onSelect(waypoint.id)}
     >
       <div className="waypoint-row-top">

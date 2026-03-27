@@ -26,6 +26,7 @@ import type {
   MissionStage,
   MissionWaypoint,
 } from '../store/useMissionStore'
+import type { MissionWaypointActionType } from '../lib/waypointActions'
 
 const CAMERA_POSITION: [number, number, number] = [156, 132, 156]
 const WORLD_CENTER = { x: 0, y: 0 }
@@ -81,16 +82,20 @@ interface MissionViewport3DProps {
   patternSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
+  hoveredWaypointId?: number | null
   selectedPattern: FlightPatternId
   hoveredPattern: FlightPatternId | null
   patternPickerVisible: boolean
   waypointContextMenuVisible?: boolean
+  bulkAssignActionType?: MissionWaypointActionType | null
   skipAnimationToken: number
   onStartDrawing: () => void
   onAddPoint: (x: number, y: number) => void
   onUpdatePoint: (id: number, x: number, y: number) => void
   onClosePolygon: () => void
   onSelectWaypoint: (id: number | null) => void
+  onBulkAssignWaypoint?: (id: number) => void
+  onExitBulkAssign?: () => void
   onHoveredWaypointChange?: (id: number | null) => void
   onWaypointContextMenu?: (request: WaypointContextMenuRequest) => void
   onReadyToCloseChange?: (ready: boolean) => void
@@ -105,16 +110,20 @@ export function MissionViewport3D({
   patternSegments,
   waypoints,
   selectedWaypointId,
+  hoveredWaypointId = null,
   selectedPattern,
   hoveredPattern,
   patternPickerVisible,
   waypointContextMenuVisible = false,
+  bulkAssignActionType = null,
   skipAnimationToken,
   onStartDrawing,
   onAddPoint,
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onBulkAssignWaypoint,
+  onExitBulkAssign,
   onHoveredWaypointChange,
   onWaypointContextMenu,
   onReadyToCloseChange,
@@ -198,10 +207,12 @@ export function MissionViewport3D({
           patternSegments={patternSegments}
           waypoints={waypoints}
           selectedWaypointId={selectedWaypointId}
+          hoveredWaypointId={hoveredWaypointId}
           selectedPattern={selectedPattern}
           hoveredPattern={hoveredPattern}
           patternPickerVisible={patternPickerVisible}
           waypointContextMenuVisible={waypointContextMenuVisible}
+          bulkAssignActionType={bulkAssignActionType}
           inputLocked={isAnimationLocked}
           skipAnimationToken={skipAnimationToken}
           onStartDrawing={onStartDrawing}
@@ -211,6 +222,8 @@ export function MissionViewport3D({
           onUpdatePoint={onUpdatePoint}
           onClosePolygon={onClosePolygon}
           onSelectWaypoint={onSelectWaypoint}
+          onBulkAssignWaypoint={onBulkAssignWaypoint}
+          onExitBulkAssign={onExitBulkAssign}
           onHoveredWaypointChange={onHoveredWaypointChange}
           onWaypointContextMenu={onWaypointContextMenu}
           onReadyToCloseChange={onReadyToCloseChange}
@@ -290,10 +303,12 @@ function MissionWorld({
   patternSegments,
   waypoints,
   selectedWaypointId,
+  hoveredWaypointId = null,
   selectedPattern,
   hoveredPattern,
   patternPickerVisible,
   waypointContextMenuVisible = false,
+  bulkAssignActionType = null,
   inputLocked,
   skipAnimationToken,
   onStartDrawing,
@@ -303,6 +318,8 @@ function MissionWorld({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onBulkAssignWaypoint,
+  onExitBulkAssign,
   onHoveredWaypointChange,
   onWaypointContextMenu,
   onReadyToCloseChange,
@@ -779,6 +796,10 @@ function MissionWorld({
     }
 
     if (stage === 'generated') {
+      if (bulkAssignActionType) {
+        return
+      }
+
       onHoveredWaypointChange?.(null)
       onSelectWaypoint(null)
     }
@@ -1112,6 +1133,7 @@ function MissionWorld({
       {stage === 'generated' &&
         revealedWaypoints.map((waypoint) => {
           const isSelected = waypoint.id === selectedWaypointId
+          const isHovered = waypoint.id === hoveredWaypointId
           const actionCount = waypoint.actions.length
           const isStartWaypoint = waypoint.id === startWaypointId
           const isEndWaypoint = waypoint.id === endWaypointId
@@ -1133,6 +1155,11 @@ function MissionWorld({
                   return
                 }
 
+                if (bulkAssignActionType) {
+                  onBulkAssignWaypoint?.(waypoint.id)
+                  return
+                }
+
                 onSelectWaypoint(waypoint.id)
               }}
               onContextMenu={(event) => {
@@ -1140,6 +1167,11 @@ function MissionWorld({
                 event.nativeEvent.preventDefault()
 
                 if (inputLocked) {
+                  return
+                }
+
+                if (bulkAssignActionType) {
+                  onExitBulkAssign?.()
                   return
                 }
 
@@ -1157,6 +1189,17 @@ function MissionWorld({
                 </mesh>
               )}
 
+              {isHovered && !isSelected && (
+                <mesh rotation-x={-Math.PI / 2} position={[0, 0.24, 0]}>
+                  <ringGeometry args={[3.6, 4.4, 36]} />
+                  <meshBasicMaterial
+                    color={selectedPatternColor}
+                    transparent
+                    opacity={0.32}
+                  />
+                </mesh>
+              )}
+
               <mesh>
                 <sphereGeometry args={[isSelected ? 2.7 : 2.3, 28, 28]} />
                 <meshStandardMaterial color="#ffffff" />
@@ -1166,7 +1209,7 @@ function MissionWorld({
                 <meshStandardMaterial
                   color={selectedPatternColor}
                   emissive={selectedPatternColor}
-                  emissiveIntensity={isSelected ? 0.32 : 0.22}
+                  emissiveIntensity={isSelected ? 0.32 : isHovered ? 0.3 : 0.22}
                 />
               </mesh>
 

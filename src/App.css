@@ -164,6 +164,12 @@
   color: #b91c1c;
 }
 
+.viewport-hint.is-bulk {
+  border-color: rgba(108, 92, 231, 0.22);
+  background: rgba(245, 243, 255, 0.96);
+  color: #5b4fcf;
+}
+
 .hint-dot {
   width: 8px;
   height: 8px;
@@ -1317,6 +1323,11 @@
 .waypoint-row.is-selected {
   border-color: rgba(108, 92, 231, 0.44);
   box-shadow: 0 8px 24px rgba(108, 92, 231, 0.1);
+}
+
+.waypoint-row.is-hovered {
+  border-color: rgba(108, 92, 231, 0.28);
+  box-shadow: 0 6px 18px rgba(108, 92, 231, 0.08);
 }
 
 .waypoint-row.is-start {
