@@ -151,9 +151,11 @@ export function getMissionEndWaypointId(
 export function getWaypointValidationWarnings({
   waypoint,
   effectiveStartWaypointId,
+  missionEndWaypointId,
 }: {
   waypoint: MissionWaypoint
   effectiveStartWaypointId: number | null
+  missionEndWaypointId?: number | null
 }): string[] {
   const warnings: string[] = []
   const totalActionDuration = waypoint.actions.reduce((total, action) => {
@@ -182,6 +184,29 @@ export function getWaypointValidationWarnings({
 
   if (hasDuplicateAction) {
     warnings.push('Duplicate action detected - consider merging identical steps.')
+  }
+
+  const hasUnsafeAltitudeAction = waypoint.actions.some((action) => {
+    if (action.type !== 'change_altitude') {
+      return false
+    }
+
+    const nextAltitude = waypoint.z + action.config.altitudeDelta
+    return nextAltitude < 0 || nextAltitude > 200
+  })
+
+  if (hasUnsafeAltitudeAction) {
+    warnings.push('Altitude out of safe range.')
+  }
+
+  const hasMidFlightPayloadDrop =
+    waypoint.actions.some((action) => action.type === 'drop_payload') &&
+    missionEndWaypointId !== undefined &&
+    missionEndWaypointId !== null &&
+    waypoint.id !== missionEndWaypointId
+
+  if (hasMidFlightPayloadDrop) {
+    warnings.push('Payload drop mid-flight - confirm intentional.')
   }
 
   const startAltitudeWarning = getStartAltitudeWarning(

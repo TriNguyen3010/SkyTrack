@@ -179,6 +179,8 @@ Status: implemented, build/lint passed. `Shift + click` on a radial action now e
 
 ### Stream D: Sidebar Action Panel Upgrade
 
+Status: implemented, build/lint passed. Action cards now support collapsed/expanded editing, duplicate, `Apply to...` with checkbox and range targeting, and selected waypoint warnings now include safe-altitude, payload-drop, duplicate, and long-dwell semantics. Reorder remains on the existing `up/down` control path for this stream instead of full drag-and-drop.
+
 #### Scope
 
 - action cards giữ collapsed/expanded state
@@ -297,6 +299,6 @@ Lý do:
 - [x] Stream A: Waypoint interaction foundation
 - [x] Stream B: Quick action radial menu
 - [x] Stream C: Bulk assign + viewport/sidebar sync
-- [ ] Stream D: Sidebar action panel upgrade
+- [x] Stream D: Sidebar action panel upgrade
 - [x] Stream E: Start node semantics + visual markers
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Waypoint Node Interaction Spec

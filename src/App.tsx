@@ -134,6 +134,12 @@ function App() {
     (state) => state.setBulkAssignActionType,
   )
   const addWaypointAction = useMissionStore((state) => state.addWaypointAction)
+  const duplicateWaypointAction = useMissionStore(
+    (state) => state.duplicateWaypointAction,
+  )
+  const applyWaypointActionToTargets = useMissionStore(
+    (state) => state.applyWaypointActionToTargets,
+  )
   const updateWaypointAction = useMissionStore((state) => state.updateWaypointAction)
   const removeWaypointAction = useMissionStore((state) => state.removeWaypointAction)
   const moveWaypointAction = useMissionStore((state) => state.moveWaypointAction)
@@ -272,10 +278,11 @@ function App() {
         ...getWaypointValidationWarnings({
           waypoint: selectedWaypoint,
           effectiveStartWaypointId,
+          missionEndWaypointId,
         }),
       ]
     },
-    [effectiveStartWaypointId, selectedWaypoint],
+    [effectiveStartWaypointId, missionEndWaypointId, selectedWaypoint],
   )
   const activeNotice =
     interactionNotice && stage !== 'idle' ? interactionNotice : null
@@ -1856,12 +1863,18 @@ function App() {
                 {selectedWaypoint ? (
                   <div ref={waypointActionEditorRef}>
                     <WaypointActionEditor
+                      key={selectedWaypoint.id}
                       waypoint={selectedWaypoint}
+                      allWaypoints={orderedWaypoints}
+                      effectiveStartWaypointId={displayStartWaypointId}
+                      missionEndWaypointId={displayEndWaypointId}
                       validationMessages={selectedWaypointValidationMessages}
                       pendingActionType={pendingActionType}
                       selectedActionDescription={selectedActionOption.description}
                       onPendingActionTypeChange={setPendingActionType}
                       onAddAction={addWaypointAction}
+                      onDuplicateAction={duplicateWaypointAction}
+                      onApplyActionToTargets={applyWaypointActionToTargets}
                       onUpdateAction={updateWaypointAction}
                       onRemoveAction={removeWaypointAction}
                       onMoveAction={moveWaypointAction}
@@ -2084,21 +2097,35 @@ function WaypointBehaviorRow({
 
 function WaypointActionEditor({
   waypoint,
+  allWaypoints,
+  effectiveStartWaypointId,
+  missionEndWaypointId,
   validationMessages,
   pendingActionType,
   selectedActionDescription,
   onPendingActionTypeChange,
   onAddAction,
+  onDuplicateAction,
+  onApplyActionToTargets,
   onUpdateAction,
   onRemoveAction,
   onMoveAction,
 }: {
   waypoint: MissionWaypoint
+  allWaypoints: MissionWaypoint[]
+  effectiveStartWaypointId: number | null
+  missionEndWaypointId: number | null
   validationMessages: string[]
   pendingActionType: MissionWaypointActionType
   selectedActionDescription: string
   onPendingActionTypeChange: (type: MissionWaypointActionType) => void
   onAddAction: (waypointId: number, type: MissionWaypointActionType) => void
+  onDuplicateAction: (waypointId: number, actionId: number) => void
+  onApplyActionToTargets: (
+    sourceWaypointId: number,
+    actionId: number,
+    targetWaypointIds: number[],
+  ) => void
   onUpdateAction: (
     waypointId: number,
     actionId: number,
@@ -2111,6 +2138,53 @@ function WaypointActionEditor({
     direction: 'up' | 'down',
   ) => void
 }) {
+  const [expandedActionIds, setExpandedActionIds] = useState<Record<number, boolean>>(
+    () => getInitialExpandedActionIds(waypoint.actions),
+  )
+  const previousActionIdsRef = useRef<number[]>(waypoint.actions.map((action) => action.id))
+
+  useEffect(() => {
+    const nextActionIds = waypoint.actions.map((action) => action.id)
+    const previousActionIds = previousActionIdsRef.current
+    const addedActionIds = nextActionIds.filter(
+      (actionId) => !previousActionIds.includes(actionId),
+    )
+
+    if (addedActionIds.length === 0 && nextActionIds.length === previousActionIds.length) {
+      previousActionIdsRef.current = nextActionIds
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setExpandedActionIds((current) => {
+        const nextState = Object.fromEntries(
+          Object.entries(current).filter(([actionId]) =>
+            nextActionIds.includes(Number(actionId)),
+          ),
+        ) as Record<number, boolean>
+
+        addedActionIds.forEach((actionId) => {
+          nextState[actionId] = true
+        })
+
+        return nextState
+      })
+    })
+
+    previousActionIdsRef.current = nextActionIds
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [waypoint.actions])
+
+  function toggleActionExpanded(actionId: number) {
+    setExpandedActionIds((current) => ({
+      ...current,
+      [actionId]: !current[actionId],
+    }))
+  }
+
   return (
     <div className="action-editor-card">
       <div className="action-editor-header">
@@ -2176,15 +2250,30 @@ function WaypointActionEditor({
         </div>
       </div>
 
+      {validationMessages.length > 1 && (
+        <div className="action-status-list">
+          {validationMessages.slice(1).map((message) => (
+            <span key={message}>{message}</span>
+          ))}
+        </div>
+      )}
+
       {waypoint.actions.length > 0 ? (
         <div className="action-list">
           {waypoint.actions.map((action, index) => (
             <WaypointActionCard
-              key={action.id}
-              waypointId={waypoint.id}
+              key={`${waypoint.id}-${action.id}`}
+              waypoint={waypoint}
               action={action}
               index={index}
               total={waypoint.actions.length}
+              allWaypoints={allWaypoints}
+              effectiveStartWaypointId={effectiveStartWaypointId}
+              missionEndWaypointId={missionEndWaypointId}
+              isExpanded={expandedActionIds[action.id] ?? false}
+              onToggleExpanded={toggleActionExpanded}
+              onDuplicateAction={onDuplicateAction}
+              onApplyActionToTargets={onApplyActionToTargets}
               onUpdateAction={onUpdateAction}
               onRemoveAction={onRemoveAction}
               onMoveAction={onMoveAction}
@@ -2201,18 +2290,36 @@ function WaypointActionEditor({
 }
 
 function WaypointActionCard({
-  waypointId,
+  waypoint,
   action,
   index,
   total,
+  allWaypoints,
+  effectiveStartWaypointId,
+  missionEndWaypointId,
+  isExpanded,
+  onToggleExpanded,
+  onDuplicateAction,
+  onApplyActionToTargets,
   onUpdateAction,
   onRemoveAction,
   onMoveAction,
 }: {
-  waypointId: number
+  waypoint: MissionWaypoint
   action: MissionWaypointAction
   index: number
   total: number
+  allWaypoints: MissionWaypoint[]
+  effectiveStartWaypointId: number | null
+  missionEndWaypointId: number | null
+  isExpanded: boolean
+  onToggleExpanded: (actionId: number) => void
+  onDuplicateAction: (waypointId: number, actionId: number) => void
+  onApplyActionToTargets: (
+    sourceWaypointId: number,
+    actionId: number,
+    targetWaypointIds: number[],
+  ) => void
   onUpdateAction: (
     waypointId: number,
     actionId: number,
@@ -2225,25 +2332,103 @@ function WaypointActionCard({
     direction: 'up' | 'down',
   ) => void
 }) {
+  const [isApplyPanelOpen, setIsApplyPanelOpen] = useState(false)
+  const [selectedTargetIds, setSelectedTargetIds] = useState<number[]>([])
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
+  const actionWarnings = useMemo(
+    () =>
+      getWaypointActionCardWarnings({
+        waypoint,
+        action,
+        effectiveStartWaypointId,
+        missionEndWaypointId,
+      }),
+    [action, effectiveStartWaypointId, missionEndWaypointId, waypoint],
+  )
+  const availableTargetWaypoints = useMemo(
+    () =>
+      allWaypoints.filter((candidate) => candidate.id !== waypoint.id),
+    [allWaypoints, waypoint.id],
+  )
+
+  function toggleTargetWaypoint(waypointId: number) {
+    setSelectedTargetIds((current) =>
+      current.includes(waypointId)
+        ? current.filter((id) => id !== waypointId)
+        : [...current, waypointId],
+    )
+  }
+
+  function selectTargetRange() {
+    const startId = Number(rangeStart)
+    const endId = Number(rangeEnd)
+
+    if (Number.isNaN(startId) || Number.isNaN(endId)) {
+      return
+    }
+
+    const minId = Math.min(startId, endId)
+    const maxId = Math.max(startId, endId)
+
+    setSelectedTargetIds(
+      availableTargetWaypoints
+        .filter((candidate) => candidate.id >= minId && candidate.id <= maxId)
+        .map((candidate) => candidate.id),
+    )
+  }
+
+  function applyToSelectedTargets() {
+    if (selectedTargetIds.length === 0) {
+      return
+    }
+
+    onApplyActionToTargets(waypoint.id, action.id, selectedTargetIds)
+    setIsApplyPanelOpen(false)
+  }
+
   return (
-    <div className="waypoint-action-card">
+    <div
+      className={`waypoint-action-card ${isExpanded ? 'is-expanded' : ''} ${
+        actionWarnings.length > 0 ? 'has-warning' : ''
+      }`}
+    >
       <div className="waypoint-action-top">
-        <div className="waypoint-action-heading">
-          <div className="waypoint-action-index">{index + 1}</div>
-          <div className="waypoint-action-copy">
-            <strong>
-              {renderWaypointActionIcon(action.type)}
-              {getWaypointActionLabel(action.type)}
-            </strong>
-            <span>{summarizeWaypointAction(action)}</span>
+        <button
+          type="button"
+          className="waypoint-action-summary-button"
+          onClick={() => onToggleExpanded(action.id)}
+        >
+          <div className="waypoint-action-heading">
+            <div className="waypoint-action-index">{index + 1}</div>
+            <div className="waypoint-action-copy">
+              <strong>
+                {renderWaypointActionIcon(action.type)}
+                {getWaypointActionLabel(action.type)}
+              </strong>
+              <span>{summarizeWaypointAction(action)}</span>
+            </div>
           </div>
-        </div>
+          <div className="waypoint-action-summary-meta">
+            {actionWarnings.length > 0 && (
+              <span className="waypoint-action-warning-pill">
+                {actionWarnings.length} warning
+                {actionWarnings.length > 1 ? 's' : ''}
+              </span>
+            )}
+            {isExpanded ? (
+              <ChevronDown size={15} strokeWidth={2.2} />
+            ) : (
+              <ChevronRight size={15} strokeWidth={2.2} />
+            )}
+          </div>
+        </button>
 
         <div className="waypoint-action-controls">
           <button
             type="button"
             className="icon-button"
-            onClick={() => onMoveAction(waypointId, action.id, 'up')}
+            onClick={() => onMoveAction(waypoint.id, action.id, 'up')}
             disabled={index === 0}
             aria-label="Move action up"
           >
@@ -2252,7 +2437,7 @@ function WaypointActionCard({
           <button
             type="button"
             className="icon-button"
-            onClick={() => onMoveAction(waypointId, action.id, 'down')}
+            onClick={() => onMoveAction(waypoint.id, action.id, 'down')}
             disabled={index === total - 1}
             aria-label="Move action down"
           >
@@ -2261,7 +2446,7 @@ function WaypointActionCard({
           <button
             type="button"
             className="icon-button is-danger"
-            onClick={() => onRemoveAction(waypointId, action.id)}
+            onClick={() => onRemoveAction(waypoint.id, action.id)}
             aria-label="Remove action"
           >
             <Trash2 size={14} strokeWidth={2.2} />
@@ -2269,104 +2454,221 @@ function WaypointActionCard({
         </div>
       </div>
 
-      <div className="waypoint-action-fields">
-        {action.type === 'hover' && (
-          <ActionNumberField
-            label="Duration"
-            value={action.config.durationSec}
-            suffix="sec"
-            min={1}
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { durationSec: value })
-            }
-          />
-        )}
+      {isExpanded && (
+        <>
+          <div className="waypoint-action-utility-row">
+            <button
+              type="button"
+              className="action-utility-button"
+              onClick={() => onDuplicateAction(waypoint.id, action.id)}
+            >
+              Duplicate
+            </button>
+            <button
+              type="button"
+              className={`action-utility-button ${
+                isApplyPanelOpen ? 'is-active' : ''
+              }`}
+              onClick={() => setIsApplyPanelOpen((current) => !current)}
+            >
+              Apply to...
+            </button>
+          </div>
 
-        {action.type === 'take_photo' && (
-          <ActionNumberField
-            label="Burst Count"
-            value={action.config.burstCount}
-            min={1}
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { burstCount: value })
-            }
-          />
-        )}
+          {actionWarnings.length > 0 && (
+            <div className="waypoint-action-warning-list">
+              {actionWarnings.map((warning) => (
+                <span key={warning}>{warning}</span>
+              ))}
+            </div>
+          )}
 
-        {action.type === 'record_video' && (
-          <ActionNumberField
-            label="Duration"
-            value={action.config.durationSec}
-            suffix="sec"
-            min={1}
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { durationSec: value })
-            }
-          />
-        )}
+          {isApplyPanelOpen && (
+            <div className="apply-action-panel">
+              <div className="apply-action-panel-header">
+                <strong>Apply to other waypoints</strong>
+                <span>Copy this action and its current config to more nodes.</span>
+              </div>
 
-        {action.type === 'drop_payload' && (
-          <ActionTextField
-            label="Payload Type"
-            value={action.config.payloadType}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { payloadType: value })
-            }
-          />
-        )}
+              {availableTargetWaypoints.length > 0 ? (
+                <div className="apply-action-targets">
+                  {availableTargetWaypoints.map((targetWaypoint) => (
+                    <label
+                      key={targetWaypoint.id}
+                      className="apply-action-checkbox"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedTargetIds.includes(targetWaypoint.id)}
+                        onChange={() => toggleTargetWaypoint(targetWaypoint.id)}
+                      />
+                      <span>Waypoint {targetWaypoint.id}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-action-state is-inline">
+                  No other waypoints available for apply-to.
+                </div>
+              )}
 
-        {action.type === 'fire_suppress' && (
-          <ActionNumberField
-            label="Duration"
-            value={action.config.durationSec}
-            suffix="sec"
-            min={1}
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { durationSec: value })
-            }
-          />
-        )}
+              <div className="apply-action-range">
+                <input
+                  className="action-input"
+                  type="number"
+                  min={1}
+                  placeholder="From"
+                  value={rangeStart}
+                  onChange={(event) => setRangeStart(event.target.value)}
+                />
+                <input
+                  className="action-input"
+                  type="number"
+                  min={1}
+                  placeholder="To"
+                  value={rangeEnd}
+                  onChange={(event) => setRangeEnd(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="action-utility-button"
+                  onClick={selectTargetRange}
+                >
+                  Select range
+                </button>
+                <button
+                  type="button"
+                  className="action-utility-button"
+                  onClick={() =>
+                    setSelectedTargetIds(
+                      availableTargetWaypoints.map((targetWaypoint) => targetWaypoint.id),
+                    )
+                  }
+                >
+                  All others
+                </button>
+              </div>
 
-        {action.type === 'change_altitude' && (
-          <ActionNumberField
-            label="Altitude Delta"
-            value={action.config.altitudeDelta}
-            suffix="m"
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { altitudeDelta: value })
-            }
-          />
-        )}
+              <div className="apply-action-footer">
+                <button
+                  type="button"
+                  className="button button-cancel"
+                  onClick={() => setIsApplyPanelOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary-small"
+                  onClick={applyToSelectedTargets}
+                  disabled={selectedTargetIds.length === 0}
+                >
+                  Apply to {selectedTargetIds.length || 0}
+                </button>
+              </div>
+            </div>
+          )}
 
-        {action.type === 'set_gimbal' && (
-          <ActionNumberField
-            label="Pitch"
-            value={action.config.pitch}
-            suffix="deg"
-            min={-90}
-            max={30}
-            step={1}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { pitch: value })
-            }
-          />
-        )}
+          <div className="waypoint-action-fields">
+            {action.type === 'hover' && (
+              <ActionNumberField
+                label="Duration"
+                value={action.config.durationSec}
+                suffix="sec"
+                min={1}
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { durationSec: value })
+                }
+              />
+            )}
 
-        {action.type === 'trigger_sensor' && (
-          <ActionTextField
-            label="Sensor Name"
-            value={action.config.sensorName}
-            onChange={(value) =>
-              onUpdateAction(waypointId, action.id, { sensorName: value })
-            }
-          />
-        )}
-      </div>
+            {action.type === 'take_photo' && (
+              <ActionNumberField
+                label="Burst Count"
+                value={action.config.burstCount}
+                min={1}
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { burstCount: value })
+                }
+              />
+            )}
+
+            {action.type === 'record_video' && (
+              <ActionNumberField
+                label="Duration"
+                value={action.config.durationSec}
+                suffix="sec"
+                min={1}
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { durationSec: value })
+                }
+              />
+            )}
+
+            {action.type === 'drop_payload' && (
+              <ActionTextField
+                label="Payload Type"
+                value={action.config.payloadType}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { payloadType: value })
+                }
+              />
+            )}
+
+            {action.type === 'fire_suppress' && (
+              <ActionNumberField
+                label="Duration"
+                value={action.config.durationSec}
+                suffix="sec"
+                min={1}
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { durationSec: value })
+                }
+              />
+            )}
+
+            {action.type === 'change_altitude' && (
+              <ActionNumberField
+                label="Altitude Delta"
+                value={action.config.altitudeDelta}
+                suffix="m"
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { altitudeDelta: value })
+                }
+              />
+            )}
+
+            {action.type === 'set_gimbal' && (
+              <ActionNumberField
+                label="Pitch"
+                value={action.config.pitch}
+                suffix="deg"
+                min={-90}
+                max={30}
+                step={1}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { pitch: value })
+                }
+              />
+            )}
+
+            {action.type === 'trigger_sensor' && (
+              <ActionTextField
+                label="Sensor Name"
+                value={action.config.sensorName}
+                onChange={(value) =>
+                  onUpdateAction(waypoint.id, action.id, { sensorName: value })
+                }
+              />
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -2446,6 +2748,94 @@ function CoordinatePill({ label, value }: { label: string; value: string }) {
 
 function formatCoordinate(value: number): string {
   return `${Math.round(value * 10) / 10}`
+}
+
+function getInitialExpandedActionIds(
+  actions: MissionWaypointAction[],
+): Record<number, boolean> {
+  if (actions.length === 0) {
+    return {}
+  }
+
+  return {
+    [actions[0].id]: true,
+  }
+}
+
+function getWaypointActionCardWarnings({
+  waypoint,
+  action,
+  effectiveStartWaypointId,
+  missionEndWaypointId,
+}: {
+  waypoint: MissionWaypoint
+  action: MissionWaypointAction
+  effectiveStartWaypointId: number | null
+  missionEndWaypointId: number | null
+}): string[] {
+  const warnings = [...validateWaypointAction(action)]
+  const totalTimedDuration = waypoint.actions.reduce((total, candidate) => {
+    if (
+      candidate.type === 'hover' ||
+      candidate.type === 'record_video' ||
+      candidate.type === 'fire_suppress'
+    ) {
+      return total + candidate.config.durationSec
+    }
+
+    return total
+  }, 0)
+
+  if (
+    (action.type === 'hover' ||
+      action.type === 'record_video' ||
+      action.type === 'fire_suppress') &&
+    totalTimedDuration > 60
+  ) {
+    warnings.push('Long dwell time at this waypoint - verify battery budget.')
+  }
+
+  const isDuplicateAction = waypoint.actions.some(
+    (candidate) =>
+      candidate.id !== action.id &&
+      candidate.type === action.type &&
+      JSON.stringify(candidate.config) === JSON.stringify(action.config),
+  )
+
+  if (isDuplicateAction) {
+    warnings.push('Duplicate action - consider merging.')
+  }
+
+  if (action.type === 'change_altitude') {
+    const nextAltitude = waypoint.z + action.config.altitudeDelta
+
+    if (nextAltitude < 0 || nextAltitude > 200) {
+      warnings.push('Altitude out of safe range.')
+    }
+
+    if (effectiveStartWaypointId === waypoint.id) {
+      if (nextAltitude < 5) {
+        warnings.push('Dangerously low altitude at mission start.')
+      } else {
+        warnings.push(
+          'Altitude change at start - drone will adjust immediately after reaching start position.',
+        )
+      }
+    }
+  }
+
+  if (
+    action.type === 'drop_payload' &&
+    missionEndWaypointId !== null &&
+    waypoint.id !== missionEndWaypointId
+  ) {
+    warnings.push('Payload drop mid-flight - confirm intentional.')
+  }
+
+  return warnings.filter(
+    (warning, index) =>
+      warnings.findIndex((candidate) => candidate === warning) === index,
+  )
 }
 
 function formatWaypointCoordinate(value: number): string {
