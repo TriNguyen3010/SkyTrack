@@ -4,12 +4,28 @@
 
 Triển khai spec trong [UI_UX_Close_Path_Logic.md](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/plans/UI_UX_Close_Path_Logic.md) theo hướng chia nhỏ thành các bước implement an toàn, không làm vỡ flow hiện tại.
 
+File này hiện là **nguồn đối chiếu chính** cho mọi lượt implement liên quan tới close-path flow, pattern picker và camera behavior quanh bước generate.
+
 Spec gốc gồm 4 mảng:
 
 1. `Close Loop` UX khi user tiến gần điểm đầu
 2. Popup chọn `Flight Pattern` ngay sau khi đóng polygon
 3. Camera behavior trong giai đoạn vẽ
 4. Camera behavior sau khi generate path
+
+## 1.1. Quy ước đối chiếu khi implement
+
+Từ thời điểm này, khi làm tiếp spec này cần bám theo thứ tự ưu tiên sau:
+
+1. File này là `source of truth` cho scope core flow
+2. [UI_UX_Close_Path_Logic.md](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/plans/UI_UX_Close_Path_Logic.md) là spec UX gốc để tham chiếu hành vi mong đợi
+3. [2026-03-27-close-path-deferred-backlog.md](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/plans/2026-03-27-close-path-deferred-backlog.md) chứa toàn bộ enhancement đã tách khỏi core flow
+
+Nguyên tắc áp dụng:
+
+- Nếu implement mới thuộc `core flow`, phải đối chiếu với `Workstream`, `Scope`, `Acceptance criteria` trong file này trước
+- Nếu nhu cầu mới thuộc nhóm enhancement, không nhét lại vào file này; thêm hoặc cập nhật ở deferred backlog
+- Nếu thực tế code khác với plan, cập nhật plan này trước hoặc cùng lượt với code để giữ một nguồn đối chiếu duy nhất
 
 ## 2. Mapping với code hiện tại
 
@@ -277,4 +293,4 @@ Và thêm UI state riêng:
 - [x] Workstream C: Camera During Drawing
 - [x] Workstream D: Camera After Generate
 - [x] Tách phần deferred ra khỏi core flow
-- [ ] Dùng file này làm nguồn đối chiếu khi implement spec
+- [x] Dùng file này làm nguồn đối chiếu khi implement spec

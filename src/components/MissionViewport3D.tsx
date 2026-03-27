@@ -65,7 +65,7 @@ interface MissionViewport3DProps {
   stage: MissionStage
   scanAltitude: number
   points: MissionPoint[]
-  coverageSegments: Array<[Vec2, Vec2]>
+  patternSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
   selectedPattern: FlightPatternId
@@ -84,7 +84,7 @@ export function MissionViewport3D({
   stage,
   scanAltitude,
   points,
-  coverageSegments,
+  patternSegments,
   waypoints,
   selectedWaypointId,
   selectedPattern,
@@ -132,7 +132,7 @@ export function MissionViewport3D({
           stage={stage}
           scanAltitude={scanAltitude}
           points={points}
-          coverageSegments={coverageSegments}
+          patternSegments={patternSegments}
           waypoints={waypoints}
           selectedWaypointId={selectedWaypointId}
           selectedPattern={selectedPattern}
@@ -210,7 +210,7 @@ function MissionWorld({
   stage,
   scanAltitude,
   points,
-  coverageSegments,
+  patternSegments,
   waypoints,
   selectedWaypointId,
   selectedPattern,
@@ -232,6 +232,10 @@ function MissionWorld({
   const { camera, gl } = useThree()
   const [isReadyToClose, setIsReadyToClose] = useState(false)
   const activePreviewPattern = stage === 'editing' ? hoveredPattern ?? selectedPattern : null
+  const activePatternColor = activePreviewPattern
+    ? getFlightPatternOption(activePreviewPattern).color
+    : getFlightPatternOption(selectedPattern).color
+  const selectedPatternColor = getFlightPatternOption(selectedPattern).color
 
   useEffect(() => {
     onReadyToCloseChange?.(isReadyToClose)
@@ -587,7 +591,7 @@ function MissionWorld({
         >
           <shapeGeometry args={[polygonShape]} />
           <meshStandardMaterial
-            color="#8b5cf6"
+            color={stage === 'generated' ? selectedPatternColor : activePatternColor}
             transparent
             opacity={stage === 'generated' ? 0.14 : isReadyToClose ? 0.12 : 0.2}
           />
@@ -597,7 +601,7 @@ function MissionWorld({
       {(stage === 'drawing' || stage === 'editing') && previewPolylinePoints.length >= 2 && (
         <Line
           points={previewPolylinePoints}
-          color="#7c6bff"
+          color={stage === 'editing' ? activePatternColor : '#7c6bff'}
           lineWidth={2.2}
           dashed={stage === 'drawing'}
           dashSize={4}
@@ -608,7 +612,7 @@ function MissionWorld({
       {hoverLinkPoints && (
         <Line
           points={hoverLinkPoints}
-          color="#7c6bff"
+          color={activePatternColor}
           transparent
           opacity={0.62}
           dashed
@@ -618,14 +622,14 @@ function MissionWorld({
       )}
 
       {stage === 'editing' &&
-        coverageSegments.map(([start, end], index) => (
+        patternSegments.map(([start, end], index) => (
           <Line
-            key={`coverage-${index}`}
+            key={`pattern-segment-${index}`}
             points={[
               toAltitudePlanePosition(start, scanAltitude, ALTITUDE_LINE_OFFSET),
               toAltitudePlanePosition(end, scanAltitude, ALTITUDE_LINE_OFFSET),
             ]}
-            color="#7c6bff"
+            color={activePatternColor}
             transparent
             opacity={0.84}
             dashed
@@ -634,13 +638,15 @@ function MissionWorld({
           />
         ))}
 
-      {stage === 'editing' && activePreviewPattern && activePreviewPattern !== 'coverage' && (
+      {stage === 'editing' &&
+        activePreviewPattern &&
+        !getFlightPatternOption(activePreviewPattern).implemented && (
         <PatternPreviewOverlay
           pattern={activePreviewPattern}
           points={points}
           altitude={scanAltitude}
         />
-      )}
+        )}
 
       {stage === 'generated' &&
         waypoints.map((waypoint) => (
@@ -650,14 +656,14 @@ function MissionWorld({
               toGroundSurfacePosition(waypoint),
               toAltitudeMarkerPosition(waypoint, waypoint.z),
             ]}
-            color={selectedWaypointId === waypoint.id ? '#6d28d9' : '#8b7cf8'}
+            color={selectedPatternColor}
             transparent
-            opacity={selectedWaypointId === waypoint.id ? 0.9 : 0.25}
+            opacity={selectedWaypointId === waypoint.id ? 0.9 : 0.32}
           />
         ))}
 
       {stage === 'generated' && routeLinePoints.length >= 2 && (
-        <Line points={routeLinePoints} color="#6d28d9" lineWidth={3.2} />
+        <Line points={routeLinePoints} color={selectedPatternColor} lineWidth={3.2} />
       )}
 
       {(stage === 'drawing' || stage === 'editing') &&
@@ -759,8 +765,8 @@ function MissionWorld({
               <mesh position={[0, 0.12, 0]}>
                 <sphereGeometry args={[isSelected ? 1.6 : 1.4, 22, 22]} />
                 <meshStandardMaterial
-                  color="#6d28d9"
-                  emissive="#6d28d9"
+                  color={selectedPatternColor}
+                  emissive={selectedPatternColor}
                   emissiveIntensity={isSelected ? 0.32 : 0.22}
                 />
               </mesh>
@@ -768,7 +774,7 @@ function MissionWorld({
               <Billboard position={[0, 8.6, 0]} follow>
                 <mesh>
                   <circleGeometry args={[4.2, 36]} />
-                  <meshBasicMaterial color={isSelected ? '#5b21f0' : '#7c6bff'} />
+                  <meshBasicMaterial color={selectedPatternColor} />
                 </mesh>
                 <Text
                   position={[0, 0, 0.05]}

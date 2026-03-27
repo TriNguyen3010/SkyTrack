@@ -33,14 +33,15 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MissionViewport3D } from './components/MissionViewport3D'
 import {
+  buildFlightPatternMission,
   FLIGHT_PATTERN_OPTIONS,
+  getFlightPatternDefinition,
   getFlightPatternOption,
+  type FlightPatternMissionMeta,
   type FlightPatternId,
 } from './lib/flightPatterns'
 import {
   canAppendPointToOpenPath,
-  generateCoverageSegments,
-  generateCoverageWaypoints,
   isSimplePolygon,
   polygonArea,
 } from './lib/missionGeometry'
@@ -127,11 +128,12 @@ function App() {
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
   const selectedPatternOption = useMemo(
-    () => getFlightPatternOption(selectedPattern),
+    () => getFlightPatternDefinition(selectedPattern),
     [selectedPattern],
   )
   const hoveredPatternOption = useMemo(
-    () => (hoveredPattern ? getFlightPatternOption(hoveredPattern) : null),
+    () =>
+      hoveredPattern ? getFlightPatternDefinition(hoveredPattern) : null,
     [hoveredPattern],
   )
   const isPolygonValid = useMemo(
@@ -139,20 +141,38 @@ function App() {
     [points],
   )
   const activePreviewPattern = hoveredPattern ?? selectedPattern
-
-  const coverageSegments = useMemo(
+  const patternGenerationContext = useMemo(
+    () => ({
+      points,
+      scanAltitude,
+      lineSpacing,
+      orientation,
+    }),
+    [lineSpacing, orientation, points, scanAltitude],
+  )
+  const activePreviewMission = useMemo(
     () =>
-      activePreviewPattern === 'coverage' &&
-      (stage === 'editing' || stage === 'generated') &&
+      (stage === 'editing' || stage === 'generated') && isPolygonValid
+        ? buildFlightPatternMission(activePreviewPattern, patternGenerationContext)
+        : null,
+    [activePreviewPattern, isPolygonValid, patternGenerationContext, stage],
+  )
+  const selectedPatternMission = useMemo(
+    () =>
       isPolygonValid
-        ? generateCoverageSegments(points, lineSpacing, orientation)
-        : [],
-    [activePreviewPattern, isPolygonValid, lineSpacing, orientation, points, stage],
+        ? buildFlightPatternMission(selectedPattern, patternGenerationContext)
+        : null,
+    [isPolygonValid, patternGenerationContext, selectedPattern],
+  )
+  const patternSegments = useMemo(
+    () => activePreviewMission?.segments ?? [],
+    [activePreviewMission],
   )
   const generatedWaypoints = useMemo(
-    () => generateCoverageWaypoints(coverageSegments, scanAltitude),
-    [coverageSegments, scanAltitude],
+    () => selectedPatternMission?.waypoints ?? [],
+    [selectedPatternMission],
   )
+  const selectedPatternMeta = selectedPatternMission?.meta ?? null
   const area = useMemo(() => polygonArea(points), [points])
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
@@ -454,7 +474,7 @@ function App() {
               stage={stage}
               scanAltitude={scanAltitude}
               points={points}
-              coverageSegments={coverageSegments}
+              patternSegments={patternSegments}
               waypoints={waypoints}
               selectedWaypointId={selectedWaypointId}
               selectedPattern={selectedPattern}
@@ -718,19 +738,19 @@ function App() {
                   </div>
                 </div>
 
+                <SliderField
+                  id="phase2-altitude"
+                  label="Scan Altitude"
+                  min={20}
+                  max={120}
+                  step={1}
+                  value={scanAltitude}
+                  valueLabel={`${scanAltitude}m`}
+                  onChange={setScanAltitude}
+                />
+
                 {selectedPattern === 'coverage' ? (
                   <>
-                    <SliderField
-                      id="phase2-altitude"
-                      label="Scan Altitude"
-                      min={20}
-                      max={120}
-                      step={1}
-                      value={scanAltitude}
-                      valueLabel={`${scanAltitude}m`}
-                      onChange={setScanAltitude}
-                    />
-
                     <SliderField
                       id="phase2-spacing"
                       label="Line Spacing"
@@ -753,6 +773,14 @@ function App() {
                       onChange={setOrientation}
                     />
                   </>
+                ) : selectedPatternOption.implemented ? (
+                  <div className="pattern-preview-card">
+                    <div className="pattern-preview-header">
+                      <ScanSearch size={16} strokeWidth={2.2} />
+                      <span>{selectedPatternOption.label} Defaults</span>
+                    </div>
+                    <p>{getImplementedPatternDefaultsCopy(selectedPattern)}</p>
+                  </div>
                 ) : (
                   <div className="pattern-preview-card">
                     <div className="pattern-preview-header">
@@ -808,10 +836,17 @@ function App() {
                     </button>
                   </div>
                   <p className="generated-summary-meta">
-                    Alt: {scanAltitude}m · Spacing: {lineSpacing}m · {orientation}° ·{' '}
-                    {waypoints.length} pts · {waypointsWithActions} action nodes ·{' '}
-                    {totalWaypointActions} actions · ~
-                    {Math.round(area)} m²
+                    {formatPatternGeneratedMeta({
+                      patternId: selectedPattern,
+                      scanAltitude,
+                      lineSpacing,
+                      orientation,
+                      waypointCount: waypoints.length,
+                      waypointsWithActions,
+                      totalWaypointActions,
+                      area,
+                      meta: selectedPatternMeta,
+                    })}
                   </p>
                   {selectedWaypoint && (
                     <div className="selected-waypoint-summary">
@@ -1401,6 +1436,58 @@ function getPatternGlyph(patternId: FlightPatternId): string {
       return 'GD'
     case 'corridor':
       return 'CR'
+  }
+}
+
+function formatPatternGeneratedMeta({
+  patternId,
+  scanAltitude,
+  lineSpacing,
+  orientation,
+  waypointCount,
+  waypointsWithActions,
+  totalWaypointActions,
+  area,
+  meta,
+}: {
+  patternId: FlightPatternId
+  scanAltitude: number
+  lineSpacing: number
+  orientation: number
+  waypointCount: number
+  waypointsWithActions: number
+  totalWaypointActions: number
+  area: number
+  meta: FlightPatternMissionMeta | null
+}): string {
+  const sharedTail = `${waypointCount} pts · ${waypointsWithActions} action nodes · ${totalWaypointActions} actions · ~${Math.round(area)} m²`
+
+  switch (patternId) {
+    case 'coverage':
+      return `Alt: ${scanAltitude}m · Spacing: ${lineSpacing}m · ${orientation}° · ${sharedTail}`
+    case 'perimeter':
+      return `Alt: ${scanAltitude}m · Boundary track · ${meta?.loops ?? 1} loop · ${meta?.direction ?? 'CW'} · ${sharedTail}`
+    case 'orbit':
+      return `Alt: ${scanAltitude}m · Auto center · Auto-fit radius · ${meta?.loops ?? 1} loop · ${meta?.direction ?? 'CW'} · ${sharedTail}`
+    case 'spiral':
+    case 'grid':
+    case 'corridor':
+      return `Alt: ${scanAltitude}m · ${sharedTail}`
+  }
+}
+
+function getImplementedPatternDefaultsCopy(patternId: FlightPatternId): string {
+  switch (patternId) {
+    case 'coverage':
+      return 'Coverage generation is active with the current spacing, orientation, and altitude settings.'
+    case 'perimeter':
+      return 'Boundary-following generation is active. This pass uses the current altitude with a single clockwise loop. Advanced perimeter controls land in the next params stream.'
+    case 'orbit':
+      return 'Orbit generation is active with auto center and auto-fit radius. This pass uses a single clockwise loop with the current altitude. Manual center and orbit controls land in the next params stream.'
+    case 'spiral':
+    case 'grid':
+    case 'corridor':
+      return 'This implemented pattern is using its current default mission settings. Advanced controls land in the next params stream.'
   }
 }
 
