@@ -28,6 +28,10 @@ Quy ước làm việc:
 - Nếu spec gốc và code hiện tại lệch nhau, cập nhật file này trước rồi mới implement.
 - Các hạng mục có dependency lớn như `Home position`, `multi-segment mission`, `touch long-press` sẽ được tách sang deferred backlog, không chặn core flow.
 
+Trạng thái hiện tại:
+
+- File này đã được chốt làm nguồn đối chiếu chính cho mọi lượt implement tiếp theo liên quan tới `Waypoint Node Interaction Spec`.
+
 ## 3. Trạng thái hiện tại
 
 ### 3.1. Đã có trong codebase
@@ -301,4 +305,4 @@ Lý do:
 - [x] Stream C: Bulk assign + viewport/sidebar sync
 - [x] Stream D: Sidebar action panel upgrade
 - [x] Stream E: Start node semantics + visual markers
-- [ ] Dùng file này làm nguồn đối chiếu khi implement Waypoint Node Interaction Spec
+- [x] Dùng file này làm nguồn đối chiếu khi implement Waypoint Node Interaction Spec
