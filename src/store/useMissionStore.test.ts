@@ -26,6 +26,18 @@ function createGeneratedMission(): FlightPatternMissionResult {
       { id: 1, x: -10, y: -10, z: 50, actions: [], role: 'anchor' },
       { id: 2, x: 10, y: -10, z: 50, actions: [], role: 'anchor' },
     ],
+    anchorWaypoints: [
+      { id: 1, x: -10, y: -10, z: 50, actions: [], role: 'anchor' },
+      { id: 2, x: 10, y: -10, z: 50, actions: [], role: 'anchor' },
+    ],
+    pathSegments: [
+      {
+        fromAnchorId: 1,
+        toAnchorId: 2,
+        length: 20,
+        direction: { x: 1, y: 0 },
+      },
+    ],
     closed: false,
     meta: {
       estimatedLength: 20,

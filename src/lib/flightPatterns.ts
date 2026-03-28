@@ -6,6 +6,15 @@ import {
 } from './missionGeometry'
 import { clipSegmentsAgainstExclusions } from './exclusionGeometry'
 import { isPointInAnyExclusion } from './exclusionGeometry'
+import {
+  DEFAULT_WAYPOINT_DENSITY_CONFIG,
+  type PathSegment,
+  type WaypointDensityConfig,
+} from './waypointDensityModels'
+import {
+  buildPathSegmentsFromAnchors,
+  resamplePath,
+} from './waypointDensity'
 import type {
   ExclusionZone,
   MissionPoint,
@@ -97,6 +106,8 @@ export interface FlightPatternMissionResult {
   patternId: FlightPatternId
   segments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
+  anchorWaypoints: MissionWaypoint[]
+  pathSegments: PathSegment[]
   closed: boolean
   meta: FlightPatternMissionMeta
 }
@@ -105,6 +116,7 @@ export interface FlightPatternBuildContext {
   points: MissionPoint[]
   exclusionZones: ExclusionZone[]
   paramsByPattern: PatternParamsMap
+  waypointDensity?: WaypointDensityConfig
 }
 
 export interface FlightPatternDefinition extends FlightPatternOption {
@@ -364,33 +376,82 @@ export function clampPatternParams<K extends FlightPatternId>(
   }
 }
 
+function createDensityAwareMissionResult({
+  patternId,
+  segments,
+  anchorWaypoints,
+  densityConfig,
+  closed,
+  meta,
+}: {
+  patternId: FlightPatternId
+  segments: Array<[Vec2, Vec2]>
+  anchorWaypoints: MissionWaypoint[]
+  densityConfig?: WaypointDensityConfig
+  closed: boolean
+  meta: Omit<FlightPatternMissionMeta, 'estimatedLength'>
+}): FlightPatternMissionResult {
+  const normalizedAnchors = normalizeWaypointIds(
+    anchorWaypoints.map((waypoint) => ({
+      ...waypoint,
+      role: 'anchor',
+    })),
+  )
+  const pathSegments = buildPathSegmentsFromAnchors(normalizedAnchors)
+  const effectiveDensityConfig = densityConfig ?? DEFAULT_WAYPOINT_DENSITY_CONFIG
+  const waypoints = resamplePath({
+    anchors: normalizedAnchors,
+    pathSegments,
+    config: effectiveDensityConfig,
+    constraints: {
+      minSpacing: 2,
+      maxWaypoints: null,
+    },
+  })
+
+  return {
+    patternId,
+    segments,
+    anchorWaypoints: normalizedAnchors,
+    pathSegments,
+    waypoints,
+    closed,
+    meta: {
+      ...meta,
+      estimatedLength: estimateWaypointPathLength(waypoints),
+    },
+  }
+}
+
 function generateCoverageMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, lineSpacing, orientation } = paramsByPattern.coverage
   const rawSegments = generateCoverageSegments(points, lineSpacing, orientation)
   const segments = clipSegmentsAgainstExclusions(rawSegments, exclusionZones)
-  const waypoints = generateCoverageWaypoints(segments, scanAltitude)
+  const anchorWaypoints = generateCoverageWaypoints(segments, scanAltitude)
 
-  return {
+  return createDensityAwareMissionResult({
     patternId: 'coverage',
     segments,
-    waypoints,
+    anchorWaypoints,
+    densityConfig: waypointDensity,
     closed: false,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
       loops: 1,
       direction: 'alternating',
     },
-  }
+  })
 }
 
 function generatePerimeterMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, insetDistance, loops, direction } =
     paramsByPattern.perimeter
@@ -418,23 +479,24 @@ function generatePerimeterMission({
     filterWaypointsOutsideExclusions(waypointRoute, exclusionZones),
   )
 
-  return {
+  return createDensityAwareMissionResult({
     patternId: 'perimeter',
     segments: buildSegmentsFromWaypointRoute(filteredWaypoints),
-    waypoints: filteredWaypoints,
+    anchorWaypoints: filteredWaypoints,
+    densityConfig: waypointDensity,
     closed: isWaypointRouteClosed(filteredWaypoints),
     meta: {
-      estimatedLength: estimateWaypointPathLength(filteredWaypoints),
       loops,
       direction: direction.toUpperCase(),
     },
-  }
+  })
 }
 
 function generateOrbitMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const {
     scanAltitude,
@@ -448,13 +510,15 @@ function generateOrbitMission({
   } = paramsByPattern.orbit
 
   if (points.length < 3) {
-    return {
-      patternId: 'orbit',
-      segments: [],
-      waypoints: [],
-      closed: true,
-      meta: {
-        estimatedLength: 0,
+      return {
+        patternId: 'orbit',
+        segments: [],
+        waypoints: [],
+        anchorWaypoints: [],
+        pathSegments: [],
+        closed: true,
+        meta: {
+          estimatedLength: 0,
         loops: 1,
         direction: 'CW',
       },
@@ -494,23 +558,24 @@ function generateOrbitMission({
     filterWaypointsOutsideExclusions(orbitRoute, exclusionZones),
   )
 
-  return {
+  return createDensityAwareMissionResult({
     patternId: 'orbit',
     segments: buildSegmentsFromWaypointRoute(filteredWaypoints),
-    waypoints: filteredWaypoints,
+    anchorWaypoints: filteredWaypoints,
+    densityConfig: waypointDensity,
     closed: isWaypointRouteClosed(filteredWaypoints),
     meta: {
-      estimatedLength: estimateWaypointPathLength(filteredWaypoints),
       loops,
       direction: direction.toUpperCase(),
     },
-  }
+  })
 }
 
 function generateGridMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, lineSpacing, orientation, crossAngle } = paramsByPattern.grid
   const primarySegments = clipSegmentsAgainstExclusions(
@@ -534,28 +599,29 @@ function generateGridMission({
     secondaryWaypoints,
     primaryWaypoints.at(-1) ?? null,
   )
-  const waypoints = normalizeWaypointIds([
+  const anchorWaypoints = normalizeWaypointIds([
     ...primaryWaypoints,
     ...stitchedSecondaryWaypoints,
   ])
 
-  return {
+  return createDensityAwareMissionResult({
     patternId: 'grid',
     segments: [...primarySegments, ...secondarySegments],
-    waypoints,
+    anchorWaypoints,
+    densityConfig: waypointDensity,
     closed: false,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
       loops: 2,
       direction: 'cross-hatch',
     },
-  }
+  })
 }
 
 function generateCorridorMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, passes, passSpacing, direction } = paramsByPattern.corridor
   const corridorSegments = clipSegmentsAgainstExclusions(
@@ -564,27 +630,28 @@ function generateCorridorMission({
   )
   const orderedSegments =
     direction === 'reverse' ? [...corridorSegments].reverse() : corridorSegments
-  const waypoints = normalizeWaypointIds(
+  const anchorWaypoints = normalizeWaypointIds(
     generateCoverageWaypoints(orderedSegments, scanAltitude),
   )
 
-  return {
+  return createDensityAwareMissionResult({
     patternId: 'corridor',
     segments: corridorSegments,
-    waypoints,
+    anchorWaypoints,
+    densityConfig: waypointDensity,
     closed: false,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
       loops: passes,
       direction: direction.toUpperCase(),
     },
-  }
+  })
 }
 
 function generateSpiralMission({
   points,
   exclusionZones,
   paramsByPattern,
+  waypointDensity,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const {
     scanAltitude,
@@ -600,7 +667,10 @@ function generateSpiralMission({
   )
   const b = armSpacing / (Math.PI * 2)
   const maxTheta = Math.max(boundingRadius / b, Math.PI * 2)
-  const sampleCount = Math.max(72, Math.ceil(maxTheta * 14))
+  const sampleCount =
+    waypointDensity?.mode === 'count' && waypointDensity.targetCount !== null
+      ? Math.max(24, waypointDensity.targetCount)
+      : Math.max(72, Math.ceil(maxTheta * 14))
   const directionSign = rotationDirection === 'cw' ? -1 : 1
   const outwardRoute: Vec2[] = []
 
@@ -640,21 +710,26 @@ function generateSpiralMission({
     actions: [],
     role: 'anchor',
   }))
-  const waypoints = normalizeWaypointIds(
+  const anchorWaypoints = normalizeWaypointIds(
     filterWaypointsOutsideExclusions(spiralCandidates, exclusionZones),
   )
 
-  return {
+  const densityConfig =
+    waypointDensity?.mode === 'auto'
+      ? waypointDensity
+      : DEFAULT_WAYPOINT_DENSITY_CONFIG
+
+  return createDensityAwareMissionResult({
     patternId: 'spiral',
-    segments: buildSegmentsFromWaypointRoute(waypoints),
-    waypoints,
+    segments: buildSegmentsFromWaypointRoute(anchorWaypoints),
+    anchorWaypoints,
+    densityConfig,
     closed: false,
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypoints),
       loops: 1,
       direction: `${spiralDirection.toUpperCase()} ${rotationDirection.toUpperCase()}`,
     },
-  }
+  })
 }
 
 function filterWaypointsOutsideExclusions(
