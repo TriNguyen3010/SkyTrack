@@ -155,7 +155,6 @@ export function MissionViewport3D({
   onPatternPickerAnchorChange,
   onAnimationStateChange,
 }: MissionViewport3DProps) {
-  const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [draggingPointId, setDraggingPointId] = useState<number | null>(null)
   const [isGeneratedRevealActive, setIsGeneratedRevealActive] = useState(false)
   const [isPatternTransitionActive, setIsPatternTransitionActive] = useState(false)
@@ -253,7 +252,6 @@ export function MissionViewport3D({
           inputLocked={isAnimationLocked}
           skipAnimationToken={skipAnimationToken}
           onStartDrawing={onStartDrawing}
-          hoverPoint={hoverPoint}
           draggingPointId={draggingPointId}
           onAddPoint={onAddPoint}
           onUpdatePoint={onUpdatePoint}
@@ -266,7 +264,6 @@ export function MissionViewport3D({
           onSelectExclusionZone={onSelectExclusionZone}
           onReadyToCloseChange={onReadyToCloseChange}
           onPatternPickerAnchorChange={onPatternPickerAnchorChange}
-          onHoverPointChange={setHoverPoint}
           onDraggingPointChange={setDraggingPointId}
           onPatternTransitionActiveChange={setIsPatternTransitionActive}
           onRouteRevealActiveChange={setIsRouteRevealActive}
@@ -326,9 +323,7 @@ export function MissionViewport3D({
 interface MissionWorldProps extends MissionViewport3DProps {
   inputLocked: boolean
   skipAnimationToken: number
-  hoverPoint: Vec2 | null
   draggingPointId: number | null
-  onHoverPointChange: (point: Vec2 | null) => void
   onDraggingPointChange: (id: number | null) => void
   onPatternTransitionActiveChange: (active: boolean) => void
   onRouteRevealActiveChange: (active: boolean) => void
@@ -358,7 +353,6 @@ function MissionWorld({
   inputLocked,
   skipAnimationToken,
   onStartDrawing,
-  hoverPoint,
   draggingPointId,
   onAddPoint,
   onUpdatePoint,
@@ -371,17 +365,22 @@ function MissionWorld({
   onSelectExclusionZone,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
-  onHoverPointChange,
   onDraggingPointChange,
   onPatternTransitionActiveChange,
   onRouteRevealActiveChange,
 }: MissionWorldProps) {
   const { camera, gl } = useThree()
+  const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [isReadyToClose, setIsReadyToClose] = useState(false)
   const [previewTransition, setPreviewTransition] =
     useState<PreviewTransition | null>(null)
   const [routeRevealAnimation, setRouteRevealAnimation] =
     useState<TimedRevealAnimation | null>(null)
+  const hoverSyncFrameRef = useRef<number | null>(null)
+  const pendingHoverStateRef = useRef<{
+    point: Vec2 | null
+    readyToClose: boolean
+  } | null>(null)
   const activePreviewPattern = stage === 'editing' ? hoveredPattern ?? selectedPattern : null
   const activePatternColor = activePreviewPattern
     ? getFlightPatternOption(activePreviewPattern).color
@@ -417,6 +416,14 @@ function MissionWorld({
   useEffect(() => {
     onReadyToCloseChange?.(isReadyToClose)
   }, [isReadyToClose, onReadyToCloseChange])
+
+  useEffect(() => {
+    return () => {
+      if (hoverSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(hoverSyncFrameRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     onPatternTransitionActiveChange(previewTransition !== null)
@@ -619,6 +626,29 @@ function MissionWorld({
       -scanAltitude,
     )
     const hitPoint = new THREE.Vector3()
+    let pendingPoint: Vec2 | null = null
+    let frameId: number | null = null
+
+    function flushPendingPoint() {
+      if (!pendingPoint) {
+        return
+      }
+
+      const nextPoint = pendingPoint
+      pendingPoint = null
+      onUpdatePoint(activePointId, nextPoint.x, nextPoint.y)
+    }
+
+    function schedulePointFlush() {
+      if (frameId !== null) {
+        return
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null
+        flushPendingPoint()
+      })
+    }
 
     function handlePointerMove(event: PointerEvent) {
       const bounds = gl.domElement.getBoundingClientRect()
@@ -643,11 +673,17 @@ function MissionWorld({
         return
       }
 
-      const nextPoint = clampScenePoint(hitPoint)
-      onUpdatePoint(activePointId, nextPoint.x, nextPoint.y)
+      pendingPoint = clampScenePoint(hitPoint)
+      schedulePointFlush()
     }
 
     function handlePointerUp() {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+        frameId = null
+      }
+
+      flushPendingPoint()
       onDraggingPointChange(null)
     }
 
@@ -655,6 +691,9 @@ function MissionWorld({
     window.addEventListener('pointerup', handlePointerUp)
 
     return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
     }
@@ -662,6 +701,41 @@ function MissionWorld({
 
   const canClosePolygon = stage === 'drawing' && drawingPoints.length >= 3
   const isPlaneInteractive = stage === 'setup' || stage === 'drawing'
+  const applyHoverState = useCallback((point: Vec2 | null, readyToClose: boolean) => {
+    if (hoverSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(hoverSyncFrameRef.current)
+      hoverSyncFrameRef.current = null
+    }
+
+    pendingHoverStateRef.current = null
+    setHoverPoint(point)
+    setIsReadyToClose(readyToClose)
+  }, [])
+  const scheduleHoverState = useCallback((point: Vec2 | null, readyToClose: boolean) => {
+    pendingHoverStateRef.current = { point, readyToClose }
+
+    if (hoverSyncFrameRef.current !== null) {
+      return
+    }
+
+    hoverSyncFrameRef.current = window.requestAnimationFrame(() => {
+      hoverSyncFrameRef.current = null
+
+      const pendingState = pendingHoverStateRef.current
+      pendingHoverStateRef.current = null
+
+      if (!pendingState) {
+        return
+      }
+
+      setHoverPoint((current) =>
+        arePointsEquivalent(current, pendingState.point) ? current : pendingState.point,
+      )
+      setIsReadyToClose((current) =>
+        current === pendingState.readyToClose ? current : pendingState.readyToClose,
+      )
+    })
+  }, [])
   const previewPolylinePoints = useMemo(() => {
     if (drawingPoints.length === 0) {
       return [] as ScenePoint[]
@@ -824,14 +898,9 @@ function MissionWorld({
     }
 
     const nextHoverPoint = clampScenePoint(event.point)
-    onHoverPointChange(nextHoverPoint)
-
-    if (!canClosePolygon || drawingPoints.length === 0) {
-      setIsReadyToClose(false)
-      return
-    }
-
-    setIsReadyToClose(
+    const nextReadyToClose =
+      canClosePolygon &&
+      drawingPoints.length > 0 &&
       isWithinCloseSnapRadius({
         camera,
         bounds: gl.domElement.getBoundingClientRect(),
@@ -839,8 +908,9 @@ function MissionWorld({
         clientY: event.clientY,
         point: drawingPoints[0],
         altitude: scanAltitude,
-      }),
-    )
+      })
+
+    scheduleHoverState(nextHoverPoint, nextReadyToClose)
   }
 
   function handleAltitudePlaneClick(event: ThreeEvent<MouseEvent>) {
@@ -860,7 +930,7 @@ function MissionWorld({
 
     if (stage === 'setup') {
       const nextPoint = clampScenePoint(event.point)
-      setIsReadyToClose(false)
+      applyHoverState(null, false)
       onStartDrawing()
       onAddPoint(nextPoint.x, nextPoint.y)
       return
@@ -868,14 +938,13 @@ function MissionWorld({
 
     if (stage === 'drawing') {
       if (isReadyToClose && canClosePolygon) {
-        onHoverPointChange(null)
-        setIsReadyToClose(false)
+        applyHoverState(null, false)
         onClosePolygon()
         return
       }
 
       const nextPoint = clampScenePoint(event.point)
-      setIsReadyToClose(false)
+      applyHoverState(null, false)
       onAddPoint(nextPoint.x, nextPoint.y)
       return
     }
@@ -899,7 +968,7 @@ function MissionWorld({
     }
 
     event.stopPropagation()
-    onHoverPointChange(null)
+    applyHoverState(null, false)
     onDraggingPointChange(pointId)
   }
 
@@ -918,8 +987,7 @@ function MissionWorld({
     }
 
     if (pointIndex === 0 && canClosePolygon) {
-      onHoverPointChange(null)
-      setIsReadyToClose(false)
+      applyHoverState(null, false)
       onClosePolygon()
     }
   }
@@ -982,8 +1050,7 @@ function MissionWorld({
             onPointerMove={handleAltitudePlaneMove}
             onPointerLeave={() => {
               if (draggingPointId === null) {
-                onHoverPointChange(null)
-                setIsReadyToClose(false)
+                applyHoverState(null, false)
               }
             }}
             onClick={handleAltitudePlaneClick}
@@ -1703,7 +1770,7 @@ function DrawingCameraController({
   animationLocked: boolean
   orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
 }) {
-  const { camera } = useThree()
+  const { camera, size } = useThree()
   const desiredTarget = useMemo(
     () =>
       new THREE.Vector3(
@@ -1713,6 +1780,17 @@ function DrawingCameraController({
       ),
     [cameraTarget, scanAltitude, stage],
   )
+  const viewportAspect = useMemo(
+    () => Math.max(size.width, 1) / Math.max(size.height, 1),
+    [size.height, size.width],
+  )
+  const desiredDrawingDistance = useMemo(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera) || stage !== 'drawing') {
+      return 0
+    }
+
+    return getDrawingFitDistance(points, camera.fov, viewportAspect, scanAltitude)
+  }, [camera, points, scanAltitude, stage, viewportAspect])
 
   useEffect(() => {
     const controls = orbitControlsRef.current
@@ -1777,13 +1855,12 @@ function DrawingCameraController({
 
     if (stage === 'drawing') {
       const currentDistance = nextOffset.length()
-      const desiredDistance = getDrawingFitDistance(points, camera, scanAltitude)
 
-      if (desiredDistance > currentDistance + 0.5) {
+      if (desiredDrawingDistance > currentDistance + 0.5) {
         nextOffset.setLength(
           THREE.MathUtils.damp(
             currentDistance,
-            desiredDistance,
+            desiredDrawingDistance,
             DRAWING_DISTANCE_DAMP_SPEED,
             delta,
           ),
@@ -3555,7 +3632,8 @@ function getMissionFitFrame({
 
 function getDrawingFitDistance(
   points: MissionPoint[],
-  camera: THREE.PerspectiveCamera,
+  cameraFov: number,
+  cameraAspect: number,
   altitude: number,
 ): number {
   if (points.length < 2) {
@@ -3568,9 +3646,9 @@ function getDrawingFitDistance(
   const bounds = new THREE.Box3().setFromPoints(pointCloud)
   const sphere = bounds.getBoundingSphere(new THREE.Sphere())
   const fitRadius = Math.max(sphere.radius, 18)
-  const verticalFov = THREE.MathUtils.degToRad(camera.fov)
+  const verticalFov = THREE.MathUtils.degToRad(cameraFov)
   const horizontalFov =
-    2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 1))
+    2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(cameraAspect, 1))
   const limitingFov = Math.min(verticalFov, horizontalFov)
 
   return THREE.MathUtils.clamp(
@@ -3578,6 +3656,22 @@ function getDrawingFitDistance(
     MIN_CAMERA_DISTANCE,
     MAX_CAMERA_DISTANCE,
   )
+}
+
+function arePointsEquivalent(
+  left: Vec2 | null,
+  right: Vec2 | null,
+  epsilon = 0.02,
+): boolean {
+  if (left === right) {
+    return true
+  }
+
+  if (!left || !right) {
+    return left === right
+  }
+
+  return Math.abs(left.x - right.x) <= epsilon && Math.abs(left.y - right.y) <= epsilon
 }
 
 function getGeneratedFocusTarget({

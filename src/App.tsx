@@ -327,6 +327,9 @@ function App() {
     }),
     [enabledExclusionZones, patternParamsByPattern, points, waypointDensity],
   )
+  const shouldBuildSelectedPatternMission =
+    isPolygonValid && (stage === 'editing' || stage === 'generated')
+  const shouldBuildBasePatternMission = isPolygonValid && stage === 'generated'
   const activePreviewMission = useMemo(
     () =>
       (stage === 'editing' || stage === 'generated') && isPolygonValid
@@ -336,10 +339,10 @@ function App() {
   )
   const selectedPatternMission = useMemo(
     () =>
-      isPolygonValid
+      shouldBuildSelectedPatternMission
         ? buildFlightPatternMission(selectedPattern, patternGenerationContext)
         : null,
-    [isPolygonValid, patternGenerationContext, selectedPattern],
+    [patternGenerationContext, selectedPattern, shouldBuildSelectedPatternMission],
   )
   const displayPatternId =
     stage === 'generated' ? generatedPatternId ?? selectedPattern : selectedPattern
@@ -347,7 +350,7 @@ function App() {
     stage === 'generated' ? generatedPatternMeta : selectedPatternMission?.meta ?? null
   const basePatternMission = useMemo(
     () =>
-      isPolygonValid
+      shouldBuildBasePatternMission
         ? buildFlightPatternMission(displayPatternId, {
             points,
             exclusionZones: enabledExclusionZones,
@@ -358,9 +361,9 @@ function App() {
     [
       displayPatternId,
       enabledExclusionZones,
-      isPolygonValid,
       patternParamsByPattern,
       points,
+      shouldBuildBasePatternMission,
     ],
   )
   const displayPatternSegments = useMemo(
@@ -373,7 +376,7 @@ function App() {
   )
   const previewBatteryReport = useMemo(
     () =>
-      selectedPatternMission
+      stage === 'editing' && selectedPatternMission
         ? computeBatteryReport({
             droneProfile: resolvedDroneProfile,
             waypoints: selectedPatternMission.waypoints,
@@ -382,7 +385,13 @@ function App() {
             safetyPreset: resolvedSafetyPreset,
           })
         : null,
-    [homePoint, resolvedDroneProfile, resolvedSafetyPreset, selectedPatternMission],
+    [
+      homePoint,
+      resolvedDroneProfile,
+      resolvedSafetyPreset,
+      selectedPatternMission,
+      stage,
+    ],
   )
   const waypointInteractionModel = useMemo(
     () =>
