@@ -96,6 +96,30 @@ export function BatterySummaryBar({
               {report.warnings[0].message}
             </div>
           )}
+
+          {report.warnings.length > 0 && (
+            <div className="battery-recommendation-list">
+              {report.warnings.map((warning) => (
+                <div
+                  key={`${warning.level}-${warning.waypointId ?? 'mission'}-${warning.message}`}
+                  className={`battery-recommendation-item is-${warning.level}`}
+                >
+                  <div className="battery-recommendation-top">
+                    <span className="battery-recommendation-level">
+                      {formatWarningLevel(warning.level)}
+                    </span>
+                    {warning.waypointId !== null && (
+                      <span className="battery-recommendation-waypoint">
+                        WP #{warning.waypointId}
+                      </span>
+                    )}
+                  </div>
+                  <strong>{warning.message}</strong>
+                  {warning.suggestion && <span>{warning.suggestion}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -112,4 +136,17 @@ function formatDuration(valueSec: number): string {
   }
 
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function formatWarningLevel(level: MissionBatteryReport['warnings'][number]['level']): string {
+  switch (level) {
+    case 'critical':
+      return 'Critical'
+    case 'warning':
+      return 'Warning'
+    case 'caution':
+      return 'Caution'
+    case 'safe':
+      return 'Safe'
+  }
 }

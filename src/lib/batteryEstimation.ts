@@ -2,12 +2,14 @@ import type { MissionWaypoint } from '../store/useMissionStore'
 import type { MissionWaypointAction } from './waypointActions'
 import type {
   BatteryEstimationInput,
+  BatteryWarning,
   DroneProfile,
   MissionBatteryReport,
   Vec3,
   WaypointBatteryEstimate,
 } from './batteryModels'
-import { buildBatteryWarnings, classifySafetyLevel, detectPointOfNoReturn, getSafetyMarginMah } from './batterySafety'
+import { generateBatteryRecommendations } from './batteryRecommendations'
+import { classifySafetyLevel, detectPointOfNoReturn, getSafetyMarginMah } from './batterySafety'
 import { DEFAULT_HOME_POINT } from './batteryPresets'
 
 const MIN_POSITIVE_VALUE = 0.0001
@@ -256,15 +258,15 @@ export function computeBatteryReport(
     warnings: [],
   }
 
-  const warnings = [
-    ...buildBatteryWarnings(baseReport),
-    ...transientWarnings.map((warning) => ({
+  const warnings = generateBatteryRecommendations({
+    report: baseReport,
+    transientWarnings: transientWarnings.map((warning) => ({
       level: 'warning' as const,
       waypointId: warning.waypointId,
       message: warning.message,
       suggestion: 'Review altitude-changing actions or home altitude settings.',
-    })),
-  ]
+    })) satisfies BatteryWarning[],
+  })
 
   return {
     ...baseReport,

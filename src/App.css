@@ -1217,7 +1217,7 @@
 .battery-warning-banner {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
   border: 1px solid rgba(239, 68, 68, 0.24);
   border-radius: 12px;
@@ -1246,7 +1246,7 @@
 }
 
 .battery-warning-banner-meta {
-  flex-shrink: 0;
+  width: fit-content;
   border-radius: 999px;
   background: rgba(239, 68, 68, 0.1);
   padding: 8px 10px;
@@ -1255,6 +1255,29 @@
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+}
+
+.battery-warning-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.battery-warning-action {
+  border: 0;
+  border-radius: 999px;
+  background: #ef4444;
+  padding: 9px 12px;
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.battery-warning-action.is-secondary {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
 }
 
 .battery-summary-header {
@@ -1365,6 +1388,61 @@
 .battery-inline-warning.is-critical {
   background: rgba(239, 68, 68, 0.12);
   color: #b91c1c;
+}
+
+.battery-recommendation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.battery-recommendation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 11px 12px;
+}
+
+.battery-recommendation-item.is-critical {
+  background: rgba(254, 242, 242, 0.96);
+}
+
+.battery-recommendation-item.is-warning {
+  background: rgba(255, 247, 237, 0.96);
+}
+
+.battery-recommendation-item.is-caution {
+  background: rgba(255, 251, 235, 0.96);
+}
+
+.battery-recommendation-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.battery-recommendation-level,
+.battery-recommendation-waypoint {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.battery-recommendation-item strong {
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.battery-recommendation-item span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .generated-route-order-note {

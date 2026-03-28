@@ -293,6 +293,8 @@ Status: implemented, build/lint/test passed. Generated missions now expose an in
 
 ### Stream E: Recommendations + Advanced Safety
 
+Status: implemented, build/lint/test passed. Battery recommendations are now generated from the mission report, infeasible missions expose actionable CTA buttons, and the expanded battery breakdown shows sorted warning/recommendation items with waypoint-specific guidance.
+
 #### Scope
 
 - `batteryRecommendations.ts`
@@ -375,5 +377,5 @@ Lý do:
 - [x] Stream B: Core battery estimation engine
 - [x] Stream C: Progressive disclosure UI
 - [x] Stream D: Safety overlay + viewport integration
-- [ ] Stream E: Recommendations + advanced safety
+- [x] Stream E: Recommendations + advanced safety
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Battery Estimation Spec

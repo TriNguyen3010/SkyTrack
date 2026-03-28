@@ -1946,7 +1946,11 @@ function App() {
                 </div>
 
                 {generatedBatteryReport && !generatedBatteryReport.isFeasible && (
-                  <BatteryWarningBanner report={generatedBatteryReport} />
+                  <BatteryWarningBanner
+                    report={generatedBatteryReport}
+                    onEditMission={editGeneratedPath}
+                    onShowDetails={() => setIsBatteryBreakdownExpanded(true)}
+                  />
                 )}
 
                 {generatedBatteryReport && (
