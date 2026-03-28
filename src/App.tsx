@@ -30,7 +30,15 @@ import {
   Trash2,
   Video,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react'
 import {
   BatterySummaryBar,
 } from './components/BatterySummaryBar'
@@ -41,10 +49,14 @@ import {
   DroneProfileSelector,
 } from './components/DroneProfileSelector'
 import {
+  DroneSimulationPlaybackBar,
+} from './components/DroneSimulationPlaybackBar'
+import {
   WaypointDensityPanel,
 } from './components/WaypointDensityPanel'
 import {
   MissionViewport3D,
+  type CameraDebugSnapshot,
   type WaypointContextMenuRequest,
   type ViewportAnimationState,
 } from './components/MissionViewport3D'
@@ -116,6 +128,15 @@ import {
   countIntermediateWaypointActions,
   migrateAnchorActionsToDensityMission,
 } from './lib/waypointDensityMigration'
+import {
+  DEFAULT_DRONE_SIMULATION_TELEMETRY,
+  getNextDroneSimulationSpeed,
+  type DroneSimulationCommand,
+  type DroneSimulationCommandInput,
+  type DroneSimulationSession,
+  type DroneSimulationTelemetry,
+} from './lib/droneSimulationPlayback'
+import { DRONE_SIMULATION_HOVER_START_DELAY_MS } from './lib/droneSimulationConstants'
 import './App.css'
 
 const toolbarItems = [
@@ -133,6 +154,21 @@ interface InteractionNotice {
 interface OverlayAnchor {
   x: number
   y: number
+}
+
+interface OverlayPanelSize {
+  width: number
+  height: number
+}
+
+function formatCameraDebugValue(value: number, digits = 2) {
+  return Number.isFinite(value) ? value.toFixed(digits) : '--'
+}
+
+function formatCameraDebugVector(vector: CameraDebugSnapshot['position']) {
+  return `${formatCameraDebugValue(vector.x)}, ${formatCameraDebugValue(
+    vector.y,
+  )}, ${formatCameraDebugValue(vector.z)}`
 }
 
 interface WaypointRadialMenuState {
@@ -236,11 +272,25 @@ function App() {
   const [patternPickerAnchor, setPatternPickerAnchor] = useState<OverlayAnchor | null>(
     null,
   )
+  const [patternPickerManualPosition, setPatternPickerManualPosition] =
+    useState<OverlayAnchor | null>(null)
+  const [patternPickerSize, setPatternPickerSize] = useState<OverlayPanelSize>({
+    width: 320,
+    height: 420,
+  })
   const [waypointRadialMenu, setWaypointRadialMenu] =
     useState<WaypointRadialMenuState | null>(null)
   const [viewportAnimationState, setViewportAnimationState] =
     useState<ViewportAnimationState>('settled')
   const [skipAnimationToken, setSkipAnimationToken] = useState(0)
+  const [simulationSession, setSimulationSession] =
+    useState<DroneSimulationSession | null>(null)
+  const [simulationCommand, setSimulationCommand] =
+    useState<DroneSimulationCommand | null>(null)
+  const [simulationTelemetry, setSimulationTelemetry] =
+    useState<DroneSimulationTelemetry>(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+  const [simulationSpeed, setSimulationSpeed] = useState<number>(1)
+  const [simulationFollowCamera, setSimulationFollowCamera] = useState(true)
   const [actionEditorFocusToken, setActionEditorFocusToken] = useState(0)
   const [isBatteryBreakdownExpanded, setIsBatteryBreakdownExpanded] =
     useState(false)
@@ -249,6 +299,8 @@ function App() {
     width: 0,
     height: 0,
   })
+  const [cameraDebugSnapshot, setCameraDebugSnapshot] =
+    useState<CameraDebugSnapshot | null>(null)
   const patternPickerRef = useRef<HTMLDivElement | null>(null)
   const waypointRadialMenuRef = useRef<HTMLDivElement | null>(null)
   const waypointActionEditorRef = useRef<HTMLDivElement | null>(null)
@@ -256,6 +308,16 @@ function App() {
   const waypointRowRefs = useRef(new Map<number, HTMLDivElement | null>())
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
+  const patternPickerDragRef = useRef<{
+    pointerId: number
+    offsetX: number
+    offsetY: number
+    width: number
+    height: number
+  } | null>(null)
+  const patternPickerDragCleanupRef = useRef<(() => void) | null>(null)
+  const simulationSessionKeyRef = useRef(0)
+  const simulationCommandTokenRef = useRef(0)
   const previousSelectedPatternRef = useRef(selectedPattern)
   const selectedPatternOption = useMemo(
     () => getFlightPatternDefinition(selectedPattern),
@@ -285,6 +347,7 @@ function App() {
       hoveredPattern ? getFlightPatternDefinition(hoveredPattern) : null,
     [hoveredPattern],
   )
+  const reviewedPatternId = hoveredPattern ?? selectedPattern
   const activeExclusionZone = useMemo(
     () =>
       activeExclusionZoneId === null
@@ -411,6 +474,10 @@ function App() {
   const displayEndWaypointId = isClosedMissionLoop
     ? displayStartWaypointId
     : missionEndWaypointId
+  const canPreviewSimulationInEditing =
+    stage === 'editing' && (selectedPatternMission?.waypoints.length ?? 0) > 1
+  const canPreviewSimulationInGenerated =
+    stage === 'generated' && orderedWaypoints.length > 1
   const area = useMemo(() => polygonArea(points), [points])
   const activeExclusionIssues = useMemo(
     () =>
@@ -652,8 +719,15 @@ function App() {
       patternPickerDelayRef.current = null
     }
 
+    patternPickerDragCleanupRef.current?.()
+    patternPickerDragCleanupRef.current = null
+    patternPickerDragRef.current = null
     setPatternPickerVisible(false)
     setHoveredPattern(null)
+    setPatternPickerManualPosition(null)
+    setSimulationSession((current) =>
+      current?.source === 'preview' ? null : current,
+    )
   }
 
   function dismissWaypointRadialMenu() {
@@ -664,12 +738,93 @@ function App() {
     setSkipAnimationToken((current) => current + 1)
   }
 
+  const issueSimulationCommand = useCallback((
+    command: DroneSimulationCommandInput,
+  ) => {
+    simulationCommandTokenRef.current += 1
+    setSimulationCommand({
+      token: simulationCommandTokenRef.current,
+      ...command,
+    } as DroneSimulationCommand)
+  }, [])
+
+  function createSimulationSession(input: {
+    source: DroneSimulationSession['source']
+    mode: DroneSimulationSession['mode']
+    patternId: FlightPatternId
+    waypoints: MissionWaypoint[]
+    isClosedLoop: boolean
+  }): DroneSimulationSession {
+    simulationSessionKeyRef.current += 1
+    return {
+      key: simulationSessionKeyRef.current,
+      ...input,
+    }
+  }
+
+  const stopSimulationSession = useCallback(() => {
+    issueSimulationCommand({ type: 'stop' })
+    setSimulationSession(null)
+    setSimulationTelemetry(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+  }, [issueSimulationCommand])
+
+  function startPreviewSimulationSession(
+    patternId: FlightPatternId,
+    mode: DroneSimulationSession['mode'],
+  ) {
+    const mission = buildFlightPatternMission(patternId, patternGenerationContext)
+
+    if (!mission || mission.waypoints.length < 2) {
+      return
+    }
+
+    setSimulationFollowCamera(true)
+    setSimulationSession(
+      createSimulationSession({
+        source: 'preview',
+        mode,
+        patternId,
+        waypoints: mission.waypoints,
+        isClosedLoop: mission.closed,
+      }),
+    )
+  }
+
+  function startGeneratedSimulationSession(mode: DroneSimulationSession['mode']) {
+    if (orderedWaypoints.length < 2) {
+      return
+    }
+
+    setSimulationFollowCamera(true)
+    setSimulationSession(
+      createSimulationSession({
+        source: 'generated',
+        mode,
+        patternId: displayPatternId,
+        waypoints: orderedWaypoints,
+        isClosedLoop: isClosedMissionLoop,
+      }),
+    )
+  }
+
+  function handlePreviewFlight() {
+    if (stage === 'generated') {
+      startGeneratedSimulationSession('one-shot')
+      return
+    }
+
+    if (stage === 'editing') {
+      startPreviewSimulationSession(selectedPattern, 'one-shot')
+    }
+  }
+
   function schedulePatternPickerOpen() {
     if (patternPickerDelayRef.current !== null) {
       window.clearTimeout(patternPickerDelayRef.current)
     }
 
     patternPickerDelayRef.current = window.setTimeout(() => {
+      setPatternPickerManualPosition(null)
       setPatternPickerVisible(true)
       patternPickerDelayRef.current = null
     }, 200)
@@ -707,33 +862,213 @@ function App() {
       return undefined
     }
 
-    const dismissTimer = window.setTimeout(() => {
-      dismissPatternPicker()
-    }, 8000)
-
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         dismissPatternPicker()
       }
     }
 
-    function handlePointerDown(event: PointerEvent) {
-      if (patternPickerRef.current?.contains(event.target as Node)) {
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [patternPickerVisible])
+
+  useEffect(() => {
+    if (!patternPickerVisible || !patternPickerRef.current) {
+      return undefined
+    }
+
+    const panelNode = patternPickerRef.current
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+
+      if (!entry) {
         return
       }
 
-      dismissPatternPicker()
-    }
+      setPatternPickerSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      })
+    })
 
-    document.addEventListener('keydown', handleKeyDown)
-    document.addEventListener('pointerdown', handlePointerDown)
+    observer.observe(panelNode)
 
     return () => {
-      window.clearTimeout(dismissTimer)
-      document.removeEventListener('keydown', handleKeyDown)
-      document.removeEventListener('pointerdown', handlePointerDown)
+      observer.disconnect()
     }
   }, [patternPickerVisible])
+
+  useEffect(() => {
+    if (!patternPickerVisible || stage === 'editing') {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      if (patternPickerDelayRef.current !== null) {
+        window.clearTimeout(patternPickerDelayRef.current)
+        patternPickerDelayRef.current = null
+      }
+
+      setPatternPickerVisible(false)
+      setHoveredPattern(null)
+      setSimulationSession((current) =>
+        current?.source === 'preview' ? null : current,
+      )
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [patternPickerVisible, stage])
+
+  useEffect(() => {
+    if (stage === 'idle' || stage === 'setup' || stage === 'drawing') {
+      const frameId = window.requestAnimationFrame(() => {
+        setSimulationSession(null)
+        setSimulationTelemetry(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+      })
+
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
+    return undefined
+  }, [stage])
+
+  useEffect(() => {
+    if (!simulationSession) {
+      const frameId = window.requestAnimationFrame(() => {
+        setSimulationTelemetry(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+      })
+
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
+    return undefined
+  }, [simulationSession])
+
+  useEffect(() => {
+    if (
+      stage !== 'editing' ||
+      !patternPickerVisible ||
+      hoveredPattern === null ||
+      !activePreviewMission ||
+      activePreviewMission.waypoints.length < 2
+    ) {
+      const frameId = window.requestAnimationFrame(() => {
+        setSimulationSession((current) =>
+          current?.source === 'preview' && current.mode === 'loop' ? null : current,
+        )
+      })
+
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
+    if (
+      simulationSession?.source === 'preview' &&
+      simulationSession.mode === 'one-shot'
+    ) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setSimulationFollowCamera(true)
+      setSimulationSession(
+        createSimulationSession({
+          source: 'preview',
+          mode: 'loop',
+          patternId: hoveredPattern,
+          waypoints: activePreviewMission.waypoints,
+          isClosedLoop: activePreviewMission.closed,
+        }),
+      )
+    }, DRONE_SIMULATION_HOVER_START_DELAY_MS)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [
+    activePreviewMission,
+    hoveredPattern,
+    patternPickerVisible,
+    simulationSession?.mode,
+    simulationSession?.source,
+    stage,
+  ])
+
+  useEffect(() => {
+    if (!simulationTelemetry.visible) {
+      return undefined
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      const activeElement = document.activeElement
+      const isTypingTarget =
+        activeElement instanceof HTMLInputElement ||
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement instanceof HTMLSelectElement
+
+      if (isTypingTarget) {
+        return
+      }
+
+      if (event.key === ' ') {
+        event.preventDefault()
+        issueSimulationCommand({ type: 'toggle-play' })
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        stopSimulationSession()
+        return
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        issueSimulationCommand({ type: 'seek-waypoint', direction: 'prev' })
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        issueSimulationCommand({ type: 'seek-waypoint', direction: 'next' })
+        return
+      }
+
+      if (event.key === ']') {
+        event.preventDefault()
+        setSimulationSpeed((current) => getNextDroneSimulationSpeed(current))
+        return
+      }
+
+      if (event.key === '[') {
+        event.preventDefault()
+        setSimulationSpeed((current) => {
+          const speeds = [0.5, 1, 2, 4]
+          const currentIndex = speeds.indexOf(current)
+          if (currentIndex <= 0) {
+            return speeds[speeds.length - 1]
+          }
+          return speeds[currentIndex - 1]
+        })
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [issueSimulationCommand, simulationTelemetry.visible, stopSimulationSession])
 
   useEffect(() => {
     if (!waypointRadialMenu) {
@@ -768,6 +1103,8 @@ function App() {
       if (patternPickerDelayRef.current !== null) {
         window.clearTimeout(patternPickerDelayRef.current)
       }
+
+      patternPickerDragCleanupRef.current?.()
     }
   }, [])
 
@@ -1346,8 +1683,10 @@ function App() {
   function handleSelectPattern(patternId: FlightPatternId) {
     const nextPattern = getFlightPatternOption(patternId)
     setSelectedPattern(patternId)
-    setHoveredPattern(null)
-    setPatternPickerVisible(false)
+    setHoveredPattern(patternId)
+    if (nextPattern.implemented) {
+      startPreviewSimulationSession(patternId, 'one-shot')
+    }
     setInteractionNotice(
       nextPattern.implemented
         ? null
@@ -1356,6 +1695,86 @@ function App() {
             message: `${nextPattern.shortLabel} is wired for popup selection and preview, but generator logic is still pending.`,
           },
     )
+  }
+
+  function handleResetPatternPickerPosition() {
+    setPatternPickerManualPosition(null)
+  }
+
+  function handlePatternPickerDragStart(event: ReactPointerEvent<HTMLDivElement>) {
+    if (
+      !patternPickerPosition ||
+      !viewportStageRef.current ||
+      (event.target instanceof HTMLElement && event.target.closest('button'))
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const viewportRect = viewportStageRef.current.getBoundingClientRect()
+
+    patternPickerDragCleanupRef.current?.()
+
+    patternPickerDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - viewportRect.left - patternPickerPosition.left,
+      offsetY: event.clientY - viewportRect.top - patternPickerPosition.top,
+      width: patternPickerPosition.width,
+      height: patternPickerSize.height,
+    }
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const dragState = patternPickerDragRef.current
+      const viewportRect = viewportStageRef.current?.getBoundingClientRect()
+
+      if (
+        !dragState ||
+        dragState.pointerId !== moveEvent.pointerId ||
+        !viewportRect
+      ) {
+        return
+      }
+
+      const nextPosition = clampOverlayPanelPosition(
+        {
+          x: moveEvent.clientX - viewportRect.left - dragState.offsetX,
+          y: moveEvent.clientY - viewportRect.top - dragState.offsetY,
+        },
+        {
+          width: dragState.width,
+          height: dragState.height,
+        },
+        viewportStageSize,
+      )
+
+      setPatternPickerManualPosition({
+        x: nextPosition.left,
+        y: nextPosition.top,
+      })
+    }
+
+    function handlePointerUp(upEvent: PointerEvent) {
+      const dragState = patternPickerDragRef.current
+
+      if (!dragState || dragState.pointerId !== upEvent.pointerId) {
+        return
+      }
+
+      patternPickerDragRef.current = null
+      cleanupDragListeners()
+    }
+
+    function cleanupDragListeners() {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      patternPickerDragCleanupRef.current = null
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    patternPickerDragCleanupRef.current = cleanupDragListeners
   }
 
   function handleWaypointContextMenu({
@@ -1495,10 +1914,27 @@ function App() {
           : stage === 'generated'
             ? 'Generated path ready · select waypoint to inspect'
             : null
-  const patternPickerPosition = getPatternPickerPosition(
+  const patternPickerAutoPosition = getPatternPickerPosition(
     patternPickerAnchor,
     viewportStageSize,
   )
+  const patternPickerPosition =
+    patternPickerAutoPosition === null
+      ? null
+      : patternPickerManualPosition
+        ? {
+            ...clampOverlayPanelPosition(
+              patternPickerManualPosition,
+              {
+                width: patternPickerAutoPosition.width,
+                height: patternPickerSize.height,
+              },
+              viewportStageSize,
+            ),
+            width: patternPickerAutoPosition.width,
+            placement: patternPickerAutoPosition.placement,
+          }
+        : patternPickerAutoPosition
   const waypointRadialMenuPosition = getWaypointRadialMenuPosition(
     waypointRadialMenu?.anchor ?? null,
     viewportStageSize,
@@ -1608,6 +2044,10 @@ function App() {
               waypointContextMenuVisible={waypointRadialMenu !== null}
               hoveredWaypointId={hoveredWaypointId}
               bulkAssignActionType={bulkAssignActionType}
+              simulationSession={simulationSession}
+              simulationCommand={simulationCommand}
+              simulationSpeed={simulationSpeed}
+              simulationFollowCamera={simulationFollowCamera}
               skipAnimationToken={skipAnimationToken}
               onStartDrawing={startDrawing}
               onAddPoint={handleAddPoint}
@@ -1619,10 +2059,53 @@ function App() {
               onReadyToCloseChange={setIsReadyToClose}
               onPatternPickerAnchorChange={setPatternPickerAnchor}
               onAnimationStateChange={setViewportAnimationState}
+              onSimulationTelemetryChange={setSimulationTelemetry}
+              onCameraDebugChange={setCameraDebugSnapshot}
               onHoveredWaypointChange={setHoveredWaypoint}
               onWaypointContextMenu={handleWaypointContextMenu}
               onSelectExclusionZone={setActiveExclusionZone}
             />
+
+            {(canPreviewSimulationInEditing || canPreviewSimulationInGenerated) && (
+              <button
+                type="button"
+                className="viewport-preview-flight"
+                onClick={handlePreviewFlight}
+              >
+                <Play size={14} strokeWidth={2.2} />
+                Preview Flight
+              </button>
+            )}
+
+            {cameraDebugSnapshot && (
+              <div className="camera-debug-panel" aria-live="off">
+                <div className="camera-debug-panel__title">Camera Debug</div>
+                <div className="camera-debug-panel__row">
+                  <span>pos</span>
+                  <strong>{formatCameraDebugVector(cameraDebugSnapshot.position)}</strong>
+                </div>
+                <div className="camera-debug-panel__row">
+                  <span>target</span>
+                  <strong>{formatCameraDebugVector(cameraDebugSnapshot.target)}</strong>
+                </div>
+                <div className="camera-debug-panel__row">
+                  <span>distance</span>
+                  <strong>{formatCameraDebugValue(cameraDebugSnapshot.distance)}</strong>
+                </div>
+                <div className="camera-debug-panel__row">
+                  <span>polar</span>
+                  <strong>{formatCameraDebugValue(cameraDebugSnapshot.polarDeg, 1)}deg</strong>
+                </div>
+                <div className="camera-debug-panel__row">
+                  <span>azimuth</span>
+                  <strong>{formatCameraDebugValue(cameraDebugSnapshot.azimuthDeg, 1)}deg</strong>
+                </div>
+                <div className="camera-debug-panel__row">
+                  <span>fov</span>
+                  <strong>{formatCameraDebugValue(cameraDebugSnapshot.fov, 1)}</strong>
+                </div>
+              </div>
+            )}
 
             {viewportAnimationState === 'animating' && (
               <button
@@ -1637,6 +2120,39 @@ function App() {
               </button>
             )}
 
+            <DroneSimulationPlaybackBar
+              telemetry={simulationTelemetry}
+              speedLabel={`${simulationSpeed}x`}
+              isFollowEnabled={simulationFollowCamera}
+              onTogglePlay={() => issueSimulationCommand({ type: 'toggle-play' })}
+              onReplay={() => {
+                if (simulationSession?.source === 'generated') {
+                  startGeneratedSimulationSession('one-shot')
+                  return
+                }
+
+                if (simulationSession?.patternId) {
+                  startPreviewSimulationSession(simulationSession.patternId, 'one-shot')
+                }
+              }}
+              onSeekPrev={() =>
+                issueSimulationCommand({ type: 'seek-waypoint', direction: 'prev' })
+              }
+              onSeekNext={() =>
+                issueSimulationCommand({ type: 'seek-waypoint', direction: 'next' })
+              }
+              onCycleSpeed={() =>
+                setSimulationSpeed((current) => getNextDroneSimulationSpeed(current))
+              }
+              onToggleFollow={() =>
+                setSimulationFollowCamera((current) => !current)
+              }
+              onStop={stopSimulationSession}
+              onScrub={(progress) =>
+                issueSimulationCommand({ type: 'seek-progress', progress })
+              }
+            />
+
             {patternPickerVisible && patternPickerPosition && (
               <div
                 ref={patternPickerRef}
@@ -1646,11 +2162,40 @@ function App() {
                 style={{
                   left: `${patternPickerPosition.left}px`,
                   top: `${patternPickerPosition.top}px`,
+                  width: `${patternPickerPosition.width}px`,
                 }}
               >
                 <div className="pattern-picker-header">
-                  <strong>Choose Flight Pattern</strong>
-                  <span>Pick a route style for the area you just closed.</span>
+                  <div
+                    className="pattern-picker-heading pattern-picker-drag-handle"
+                    onPointerDown={handlePatternPickerDragStart}
+                  >
+                    <div className="pattern-picker-title">
+                      <strong>Flight Pattern Picker</strong>
+                      <span>Drag this header to reposition the picker.</span>
+                    </div>
+                    <div className="pattern-picker-actions">
+                      <button
+                        type="button"
+                        className="pattern-picker-hide"
+                        onClick={handleResetPatternPickerPosition}
+                        disabled={patternPickerManualPosition === null}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        className="pattern-picker-hide"
+                        onClick={dismissPatternPicker}
+                      >
+                        Hide
+                      </button>
+                    </div>
+                  </div>
+                  <span>
+                    Hover a path type to lock its preview, drag the canvas to inspect it,
+                    then click to choose.
+                  </span>
                 </div>
 
                 <div className="pattern-picker-list">
@@ -1660,11 +2205,9 @@ function App() {
                       type="button"
                       className={`pattern-tile ${
                         selectedPattern === pattern.id ? 'is-selected' : ''
-                      }`}
+                      } ${reviewedPatternId === pattern.id ? 'is-previewing' : ''}`}
                       onMouseEnter={() => setHoveredPattern(pattern.id)}
-                      onMouseLeave={() => setHoveredPattern((current) =>
-                        current === pattern.id ? null : current,
-                      )}
+                      onFocus={() => setHoveredPattern(pattern.id)}
                       onClick={() => handleSelectPattern(pattern.id)}
                     >
                       <span
@@ -1678,6 +2221,9 @@ function App() {
                         <span>{pattern.description}</span>
                       </span>
                       <span className="pattern-tile-meta">
+                        {reviewedPatternId === pattern.id && (
+                          <span className="pattern-preview-chip">Previewing</span>
+                        )}
                         {!pattern.implemented && (
                           <span className="pattern-soon-chip">Preview</span>
                         )}
@@ -1692,7 +2238,7 @@ function App() {
                   className="pattern-picker-footer"
                   onClick={dismissPatternPicker}
                 >
-                  Customize later in sidebar
+                  Hide picker
                   <ChevronRight size={14} strokeWidth={2.2} />
                 </button>
               </div>
@@ -3859,30 +4405,53 @@ function formatPatternGeneratedMeta({
 function getPatternPickerPosition(
   anchor: OverlayAnchor | null,
   containerSize: { width: number; height: number },
-): { left: number; top: number; placement: 'above' | 'below' } | null {
+): { left: number; top: number; width: number; placement: 'above' | 'below' } | null {
   if (!anchor || containerSize.width === 0 || containerSize.height === 0) {
     return null
   }
 
   const { width, height } = containerSize
-  const popupWidth = 320
-  const popupHeight = 372
-  const margin = 18
-  const left = clampValue(anchor.x, popupWidth / 2 + margin, width - popupWidth / 2 - margin)
-  const preferBelow = anchor.y < 150
+  const margin = 16
+  const gap = 18
+  const popupWidth = Math.min(320, Math.max(width - margin * 2, 0))
+  const popupHeight = Math.min(420, Math.max(height - margin * 2, 0))
 
-  if (preferBelow) {
-    return {
-      left,
-      top: clampValue(anchor.y + 20, margin, height - popupHeight - margin),
-      placement: 'below',
-    }
+  if (popupWidth <= 0 || popupHeight <= 0) {
+    return null
   }
 
+  const availableAbove = anchor.y - gap - margin
+  const availableBelow = height - anchor.y - gap - margin
+  const placement =
+    availableBelow >= popupHeight || availableBelow >= availableAbove
+      ? 'below'
+      : 'above'
+  const unclampedLeft = anchor.x - popupWidth / 2
+  const unclampedTop =
+    placement === 'below' ? anchor.y + gap : anchor.y - popupHeight - gap
+
   return {
-    left,
-    top: clampValue(anchor.y - 20, popupHeight + margin, height - margin),
-    placement: 'above',
+    left: clampValue(unclampedLeft, margin, width - popupWidth - margin),
+    top: clampValue(unclampedTop, margin, height - popupHeight - margin),
+    width: popupWidth,
+    placement,
+  }
+}
+
+function clampOverlayPanelPosition(
+  position: OverlayAnchor,
+  panelSize: OverlayPanelSize,
+  containerSize: { width: number; height: number },
+): { left: number; top: number } {
+  const margin = 16
+  const safeWidth = Math.max(panelSize.width, 0)
+  const safeHeight = Math.max(panelSize.height, 0)
+  const maxLeft = Math.max(margin, containerSize.width - safeWidth - margin)
+  const maxTop = Math.max(margin, containerSize.height - safeHeight - margin)
+
+  return {
+    left: clampValue(position.x, margin, maxLeft),
+    top: clampValue(position.y, margin, maxTop),
   }
 }
 

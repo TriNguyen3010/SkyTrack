@@ -9,6 +9,7 @@ import {
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { DroneGhost } from './DroneGhost'
 import {
   getFlightPatternOption,
   type FlightPatternId,
@@ -26,6 +27,40 @@ import type {
   SafetyLevel,
   WaypointBatteryEstimate,
 } from '../lib/batteryModels'
+import {
+  DRONE_SIMULATION_FOLLOW_RESUME_DELAY_MS,
+  DRONE_SIMULATION_LONG_PATH_WAYPOINT_THRESHOLD,
+  DRONE_SIMULATION_RESTART_DELAY_MS,
+  DRONE_SIMULATION_CAMERA_DESIRED_POLAR_ANGLE,
+  DRONE_SIMULATION_CAMERA_DESIRED_FOV,
+  DRONE_SIMULATION_CAMERA_MAX_DISTANCE,
+  DRONE_SIMULATION_CAMERA_MAX_POLAR_ANGLE,
+  DRONE_SIMULATION_CAMERA_MIN_DISTANCE,
+  DRONE_SIMULATION_CAMERA_MIN_POLAR_ANGLE,
+  DRONE_SIMULATION_CAMERA_POSITION_LERP_SPEED,
+  DRONE_SIMULATION_CAMERA_RECOVERY_LERP_SPEED,
+  DRONE_SIMULATION_CAMERA_TARGET_LERP_SPEED,
+  DRONE_SIMULATION_PREVIEW_CAMERA_FOV,
+  DRONE_SIMULATION_PREVIEW_CAMERA_POSITION,
+  DRONE_SIMULATION_PREVIEW_CAMERA_TARGET,
+  DRONE_SIMULATION_TRAIL_POINT_LIMIT,
+  DRONE_SIMULATION_TRAIL_POINT_LIMIT_LONG_PATH,
+} from '../lib/droneSimulationConstants'
+import { getWaypointSimulationActionCues } from '../lib/droneSimulationActions'
+import {
+  buildDroneSimulationPath,
+  getDroneSimulationPathSplit,
+  getDroneSimulationWaypointIndexAtProgress,
+  getDroneSimulationWaypointProgress,
+  sampleDroneSimulationPath,
+} from '../lib/droneSimulationPath'
+import {
+  DEFAULT_DRONE_SIMULATION_TELEMETRY,
+  getDroneSimulationDurationMs,
+  type DroneSimulationCommand,
+  type DroneSimulationSession,
+  type DroneSimulationTelemetry,
+} from '../lib/droneSimulationPlayback'
 import type {
   DrawingTarget,
   ExclusionZone,
@@ -66,6 +101,22 @@ const PATTERN_OVERLAY_OFFSET = 0.22
 const PATTERN_FILL_OFFSET = 0.04
 type ScenePoint = [number, number, number]
 export type ViewportAnimationState = 'animating' | 'skipped' | 'settled'
+export interface CameraDebugSnapshot {
+  position: {
+    x: number
+    y: number
+    z: number
+  }
+  target: {
+    x: number
+    y: number
+    z: number
+  }
+  distance: number
+  polarDeg: number
+  azimuthDeg: number
+  fov: number
+}
 export interface WaypointContextMenuRequest {
   waypointId: number
   clientX: number
@@ -78,8 +129,28 @@ type OrbitControlsHandle = {
   enablePan: boolean
   enableRotate: boolean
   enableZoom: boolean
+  minDistance: number
+  maxDistance: number
   minPolarAngle: number
   maxPolarAngle: number
+}
+
+interface SimulationCameraProfile {
+  desiredDistance: number
+  minDistance: number
+  maxDistance: number
+  desiredPolarAngle: number
+  minPolarAngle: number
+  maxPolarAngle: number
+  desiredFov: number
+  lookAheadDistance: number
+  missionCenterBlend: number
+  heightBias: number
+  targetLerpSpeed: number
+  positionLerpSpeed: number
+  recoveryLerpSpeed: number
+  fixedPosition?: THREE.Vector3
+  fixedTarget?: THREE.Vector3
 }
 
 interface MissionViewport3DProps {
@@ -103,6 +174,10 @@ interface MissionViewport3DProps {
   patternPickerVisible: boolean
   waypointContextMenuVisible?: boolean
   bulkAssignActionType?: MissionWaypointActionType | null
+  simulationSession?: DroneSimulationSession | null
+  simulationCommand?: DroneSimulationCommand | null
+  simulationSpeed?: number
+  simulationFollowCamera?: boolean
   skipAnimationToken: number
   onStartDrawing: () => void
   onAddPoint: (x: number, y: number) => void
@@ -117,6 +192,8 @@ interface MissionViewport3DProps {
   onReadyToCloseChange?: (ready: boolean) => void
   onPatternPickerAnchorChange?: (anchor: Vec2 | null) => void
   onAnimationStateChange?: (state: ViewportAnimationState) => void
+  onSimulationTelemetryChange?: (telemetry: DroneSimulationTelemetry) => void
+  onCameraDebugChange?: (snapshot: CameraDebugSnapshot | null) => void
 }
 
 export function MissionViewport3D({
@@ -140,6 +217,10 @@ export function MissionViewport3D({
   patternPickerVisible,
   waypointContextMenuVisible = false,
   bulkAssignActionType = null,
+  simulationSession = null,
+  simulationCommand = null,
+  simulationSpeed = 1,
+  simulationFollowCamera = true,
   skipAnimationToken,
   onStartDrawing,
   onAddPoint,
@@ -154,6 +235,8 @@ export function MissionViewport3D({
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onAnimationStateChange,
+  onSimulationTelemetryChange,
+  onCameraDebugChange,
 }: MissionViewport3DProps) {
   const [draggingPointId, setDraggingPointId] = useState<number | null>(null)
   const [isGeneratedRevealActive, setIsGeneratedRevealActive] = useState(false)
@@ -163,6 +246,7 @@ export function MissionViewport3D({
   const animationStateRef = useRef<ViewportAnimationState>('settled')
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const orbitControlsRef = useRef<OrbitControlsHandle | null>(null)
+  const lastOrbitInteractionAtRef = useRef(0)
   const isAnimationLocked =
     isGeneratedRevealActive || isPatternTransitionActive || isRouteRevealActive
   const publishAnimationState = useCallback(
@@ -249,6 +333,10 @@ export function MissionViewport3D({
           patternPickerVisible={patternPickerVisible}
           waypointContextMenuVisible={waypointContextMenuVisible}
           bulkAssignActionType={bulkAssignActionType}
+          simulationSession={simulationSession}
+          simulationCommand={simulationCommand}
+          simulationSpeed={simulationSpeed}
+          simulationFollowCamera={simulationFollowCamera}
           inputLocked={isAnimationLocked}
           skipAnimationToken={skipAnimationToken}
           onStartDrawing={onStartDrawing}
@@ -267,6 +355,9 @@ export function MissionViewport3D({
           onDraggingPointChange={setDraggingPointId}
           onPatternTransitionActiveChange={setIsPatternTransitionActive}
           onRouteRevealActiveChange={setIsRouteRevealActive}
+          onSimulationTelemetryChange={onSimulationTelemetryChange}
+          orbitControlsRef={orbitControlsRef}
+          lastOrbitInteractionAtRef={lastOrbitInteractionAtRef}
         />
       </Suspense>
 
@@ -277,7 +368,6 @@ export function MissionViewport3D({
         makeDefault
         enabled={
           draggingPointId === null &&
-          !patternPickerVisible &&
           !waypointContextMenuVisible &&
           !isAnimationLocked
         }
@@ -290,10 +380,14 @@ export function MissionViewport3D({
         }
         enablePan={
           stage !== 'drawing' &&
-          !patternPickerVisible &&
           !waypointContextMenuVisible &&
           !isAnimationLocked
         }
+        onStart={() => {
+          if (typeof performance !== 'undefined') {
+            lastOrbitInteractionAtRef.current = performance.now()
+          }
+        }}
       />
       <DrawingCameraController
         stage={stage}
@@ -301,7 +395,6 @@ export function MissionViewport3D({
         points={drawingTarget === 'exclusion' ? drawingPoints : points}
         cameraTarget={cameraTarget}
         draggingPointId={draggingPointId}
-        patternPickerVisible={patternPickerVisible}
         waypointContextMenuVisible={waypointContextMenuVisible}
         animationLocked={isAnimationLocked}
         orbitControlsRef={orbitControlsRef}
@@ -316,8 +409,80 @@ export function MissionViewport3D({
         orbitControlsRef={orbitControlsRef}
         onRevealActiveChange={setIsGeneratedRevealActive}
       />
+      <CameraDebugObserver
+        orbitControlsRef={orbitControlsRef}
+        onCameraDebugChange={onCameraDebugChange}
+      />
     </Canvas>
   )
+}
+
+function CameraDebugObserver({
+  orbitControlsRef,
+  onCameraDebugChange,
+}: {
+  orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
+  onCameraDebugChange?: (snapshot: CameraDebugSnapshot | null) => void
+}) {
+  const { camera } = useThree()
+  const lastPublishedAtRef = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      onCameraDebugChange?.(null)
+    }
+  }, [onCameraDebugChange])
+
+  useFrame(() => {
+    if (!onCameraDebugChange || !(camera instanceof THREE.PerspectiveCamera)) {
+      return
+    }
+
+    const controls = orbitControlsRef.current
+
+    if (!controls) {
+      return
+    }
+
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+
+    if (now - lastPublishedAtRef.current < 120) {
+      return
+    }
+
+    lastPublishedAtRef.current = now
+
+    const offset = camera.position.clone().sub(controls.target)
+    const distance = offset.length()
+    const polarDeg =
+      distance === 0
+        ? 0
+        : THREE.MathUtils.radToDeg(
+            Math.acos(THREE.MathUtils.clamp(offset.y / distance, -1, 1)),
+          )
+    const azimuthDeg = THREE.MathUtils.radToDeg(
+      Math.atan2(offset.x, offset.z),
+    )
+
+    onCameraDebugChange({
+      position: {
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+      },
+      target: {
+        x: controls.target.x,
+        y: controls.target.y,
+        z: controls.target.z,
+      },
+      distance,
+      polarDeg,
+      azimuthDeg,
+      fov: camera.fov,
+    })
+  })
+
+  return null
 }
 
 interface MissionWorldProps extends MissionViewport3DProps {
@@ -327,6 +492,8 @@ interface MissionWorldProps extends MissionViewport3DProps {
   onDraggingPointChange: (id: number | null) => void
   onPatternTransitionActiveChange: (active: boolean) => void
   onRouteRevealActiveChange: (active: boolean) => void
+  orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
+  lastOrbitInteractionAtRef: React.RefObject<number>
 }
 
 function MissionWorld({
@@ -350,6 +517,10 @@ function MissionWorld({
   patternPickerVisible,
   waypointContextMenuVisible = false,
   bulkAssignActionType = null,
+  simulationSession = null,
+  simulationCommand = null,
+  simulationSpeed = 1,
+  simulationFollowCamera = true,
   inputLocked,
   skipAnimationToken,
   onStartDrawing,
@@ -368,6 +539,9 @@ function MissionWorld({
   onDraggingPointChange,
   onPatternTransitionActiveChange,
   onRouteRevealActiveChange,
+  onSimulationTelemetryChange,
+  orbitControlsRef,
+  lastOrbitInteractionAtRef,
 }: MissionWorldProps) {
   const { camera, gl } = useThree()
   const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
@@ -1266,6 +1440,19 @@ function MissionWorld({
           />
         ))}
 
+      <DroneSimulationLayer
+        session={simulationSession}
+        command={simulationCommand}
+        speed={simulationSpeed}
+        followCamera={simulationFollowCamera}
+        altitude={scanAltitude}
+        color={stage === 'generated' ? selectedPatternColor : activePatternColor}
+        inputLocked={inputLocked}
+        orbitControlsRef={orbitControlsRef}
+        lastOrbitInteractionAtRef={lastOrbitInteractionAtRef}
+        onTelemetryChange={onSimulationTelemetryChange}
+      />
+
       {stage === 'generated' && (
         <PatternVisualPolish
           pattern={selectedPattern}
@@ -1755,7 +1942,6 @@ function DrawingCameraController({
   points,
   cameraTarget,
   draggingPointId,
-  patternPickerVisible,
   waypointContextMenuVisible,
   animationLocked,
   orbitControlsRef,
@@ -1765,7 +1951,6 @@ function DrawingCameraController({
   points: MissionPoint[]
   cameraTarget: Vec2
   draggingPointId: number | null
-  patternPickerVisible: boolean
   waypointContextMenuVisible: boolean
   animationLocked: boolean
   orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
@@ -1801,12 +1986,10 @@ function DrawingCameraController({
 
     controls.enabled =
       draggingPointId === null &&
-      !patternPickerVisible &&
       !waypointContextMenuVisible &&
       !animationLocked
     controls.enablePan =
       stage !== 'drawing' &&
-      !patternPickerVisible &&
       !waypointContextMenuVisible &&
       !animationLocked
     controls.enableRotate = true
@@ -1819,7 +2002,6 @@ function DrawingCameraController({
     animationLocked,
     draggingPointId,
     orbitControlsRef,
-    patternPickerVisible,
     stage,
     waypointContextMenuVisible,
   ])
@@ -1832,7 +2014,6 @@ function DrawingCameraController({
     }
 
     if (
-      patternPickerVisible ||
       waypointContextMenuVisible ||
       draggingPointId !== null ||
       animationLocked
@@ -2172,6 +2353,635 @@ function AltitudeBeacon({
           </Text>
         </Billboard>
       </group>
+    </>
+  )
+}
+
+function DroneSimulationLayer({
+  session,
+  command,
+  speed,
+  followCamera,
+  altitude,
+  color,
+  inputLocked,
+  orbitControlsRef,
+  lastOrbitInteractionAtRef,
+  onTelemetryChange,
+}: {
+  session: DroneSimulationSession | null
+  command: DroneSimulationCommand | null
+  speed: number
+  followCamera: boolean
+  altitude: number
+  color: string
+  inputLocked: boolean
+  orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
+  lastOrbitInteractionAtRef: React.RefObject<number>
+  onTelemetryChange?: (telemetry: DroneSimulationTelemetry) => void
+}) {
+  const { camera } = useThree()
+  const simulationCameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const simulationPath = useMemo(
+    () =>
+      session
+        ? buildDroneSimulationPath({
+            waypoints: session.waypoints,
+            isClosedLoop: session.isClosedLoop,
+          })
+        : null,
+    [session],
+  )
+  const [renderState, setRenderState] = useState<{
+    position: ScenePoint
+    heading: ScenePoint
+    travelled: ScenePoint[]
+    remaining: ScenePoint[]
+    currentWaypointIndex: number
+    progress: number
+    currentCue: string | null
+    statusLabel: string | null
+    pulseWaypointId: number | null
+    trailPoints: ScenePoint[]
+  } | null>(null)
+  const previousSessionKeyRef = useRef<number | null>(null)
+  const previousCommandTokenRef = useRef<number | null>(null)
+  const progressRef = useRef(0)
+  const isPlayingRef = useRef(false)
+  const isCompletedRef = useRef(false)
+  const pauseRemainingMsRef = useRef(0)
+  const loopRestartRemainingMsRef = useRef(0)
+  const lastVisitedWaypointIndexRef = useRef(0)
+  const activeCueRemainingMsRef = useRef(0)
+  const activeCueRef = useRef<string | null>(null)
+  const trailPointsRef = useRef<ScenePoint[]>([])
+  const telemetryLastPublishedAtRef = useRef(0)
+  const currentPulseWaypointIdRef = useRef<number | null>(null)
+  const gridPassPauseAppliedRef = useRef(false)
+  const simulationCameraProfile = useMemo(
+    () =>
+      getSimulationCameraProfile(
+        simulationPath?.totalLength ?? 0,
+        session?.patternId ?? 'coverage',
+        session?.source ?? 'generated',
+      ),
+    [session?.patternId, session?.source, simulationPath?.totalLength],
+  )
+  const simulationMissionCenter = useMemo(() => {
+    if (!session || session.waypoints.length === 0) {
+      return null
+    }
+
+    const center = polygonCentroid(session.waypoints)
+    const averageAltitude =
+      session.waypoints.reduce((sum, waypoint) => sum + waypoint.z, 0) /
+      session.waypoints.length
+
+    return new THREE.Vector3(center.x, averageAltitude, center.y)
+  }, [session])
+
+  const publishTelemetry = useCallback(
+    (
+      partial?: Partial<DroneSimulationTelemetry>,
+      force = false,
+    ) => {
+      if (!onTelemetryChange) {
+        return
+      }
+
+      const now =
+        typeof performance !== 'undefined' ? performance.now() : Date.now()
+
+      if (!force && now - telemetryLastPublishedAtRef.current < 80) {
+        return
+      }
+
+      telemetryLastPublishedAtRef.current = now
+      onTelemetryChange({
+        ...DEFAULT_DRONE_SIMULATION_TELEMETRY,
+        visible: Boolean(session && simulationPath),
+        mode: session?.mode ?? null,
+        source: session?.source ?? null,
+        patternId: session?.patternId ?? null,
+        isPlaying: isPlayingRef.current,
+        isCompleted: isCompletedRef.current,
+        progress: progressRef.current,
+        currentWaypointIndex:
+          partial?.currentWaypointIndex ?? lastVisitedWaypointIndexRef.current,
+        waypointCount: simulationPath?.waypoints.length ?? 0,
+        ...partial,
+      })
+    },
+    [onTelemetryChange, session, simulationPath],
+  )
+
+  useEffect(() => {
+    if (camera instanceof THREE.PerspectiveCamera) {
+      simulationCameraRef.current = camera
+    }
+  }, [camera])
+
+  useEffect(() => {
+    const simulationCamera = simulationCameraRef.current
+
+    if (!simulationCamera || !session) {
+      return
+    }
+
+    const previousFov = simulationCamera.fov
+    simulationCamera.fov = simulationCameraProfile.desiredFov
+    simulationCamera.updateProjectionMatrix()
+
+    return () => {
+      simulationCamera.fov = previousFov
+      simulationCamera.updateProjectionMatrix()
+    }
+  }, [session, simulationCameraProfile.desiredFov])
+
+  useEffect(() => {
+    const controls = orbitControlsRef.current
+
+    if (!controls) {
+      return
+    }
+
+    if (session && followCamera) {
+      controls.minDistance = simulationCameraProfile.minDistance * 0.88
+      controls.maxDistance = simulationCameraProfile.maxDistance * 1.05
+      controls.minPolarAngle = Math.max(
+        DEFAULT_MIN_POLAR_ANGLE,
+        simulationCameraProfile.minPolarAngle,
+      )
+      controls.maxPolarAngle = Math.min(
+        DEFAULT_MAX_POLAR_ANGLE,
+        simulationCameraProfile.maxPolarAngle,
+      )
+      controls.update()
+
+      return () => {
+        controls.minDistance = MIN_CAMERA_DISTANCE
+        controls.maxDistance = MAX_CAMERA_DISTANCE
+        controls.minPolarAngle = DEFAULT_MIN_POLAR_ANGLE
+        controls.maxPolarAngle = DEFAULT_MAX_POLAR_ANGLE
+        controls.update()
+      }
+    }
+
+    controls.minDistance = MIN_CAMERA_DISTANCE
+    controls.maxDistance = MAX_CAMERA_DISTANCE
+    controls.minPolarAngle = DEFAULT_MIN_POLAR_ANGLE
+    controls.maxPolarAngle = DEFAULT_MAX_POLAR_ANGLE
+    controls.update()
+  }, [followCamera, orbitControlsRef, session, simulationCameraProfile])
+
+  useEffect(() => {
+    if (!session || !simulationPath) {
+      previousSessionKeyRef.current = null
+      previousCommandTokenRef.current = null
+      progressRef.current = 0
+      isPlayingRef.current = false
+      isCompletedRef.current = false
+      pauseRemainingMsRef.current = 0
+      loopRestartRemainingMsRef.current = 0
+      lastVisitedWaypointIndexRef.current = 0
+      activeCueRemainingMsRef.current = 0
+      activeCueRef.current = null
+      trailPointsRef.current = []
+      currentPulseWaypointIdRef.current = null
+      gridPassPauseAppliedRef.current = false
+      const frameId = window.requestAnimationFrame(() => {
+        setRenderState(null)
+      })
+      onTelemetryChange?.(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
+    if (previousSessionKeyRef.current === session.key) {
+      return
+    }
+
+    previousSessionKeyRef.current = session.key
+    progressRef.current = 0
+    isPlayingRef.current = true
+    isCompletedRef.current = false
+    pauseRemainingMsRef.current = 0
+    loopRestartRemainingMsRef.current = 0
+    lastVisitedWaypointIndexRef.current = 0
+    activeCueRemainingMsRef.current = 0
+    activeCueRef.current = null
+    gridPassPauseAppliedRef.current = false
+    currentPulseWaypointIdRef.current = simulationPath.waypoints[0]?.id ?? null
+    const initialSample = sampleDroneSimulationPath(simulationPath, 0)
+    const initialSplit = getDroneSimulationPathSplit(simulationPath, 0)
+    const initialScenePoint = toScenePositionFromVec3(initialSample.position)
+    trailPointsRef.current = [initialScenePoint]
+    const frameId = window.requestAnimationFrame(() => {
+      setRenderState({
+        position: initialScenePoint,
+        heading: toHeadingScenePoint(initialSample.heading),
+        travelled: initialSplit.travelled.map(toScenePositionFromVec3),
+        remaining: initialSplit.remaining.map(toScenePositionFromVec3),
+        currentWaypointIndex: 0,
+        progress: 0,
+        currentCue: null,
+        statusLabel: getSimulationStatusLabel({
+          patternId: session.patternId,
+          currentWaypointIndex: 0,
+          waypointCount: simulationPath.waypoints.length,
+        }),
+        pulseWaypointId: simulationPath.waypoints[0]?.id ?? null,
+        trailPoints: [initialScenePoint],
+      })
+    })
+    publishTelemetry(
+      {
+        isPlaying: true,
+        isCompleted: false,
+        progress: 0,
+        currentWaypointIndex: 0,
+        waypointCount: simulationPath.waypoints.length,
+      },
+      true,
+    )
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [onTelemetryChange, publishTelemetry, session, simulationPath])
+
+  useEffect(() => {
+    if (!command || !session || !simulationPath) {
+      return
+    }
+
+    if (previousCommandTokenRef.current === command.token) {
+      return
+    }
+
+    previousCommandTokenRef.current = command.token
+
+    switch (command.type) {
+      case 'toggle-play':
+        isPlayingRef.current = !isPlayingRef.current
+        break
+      case 'play':
+        isPlayingRef.current = true
+        break
+      case 'pause':
+        isPlayingRef.current = false
+        break
+      case 'stop':
+        isPlayingRef.current = false
+        break
+      case 'replay':
+        progressRef.current = 0
+        isPlayingRef.current = true
+        isCompletedRef.current = false
+        break
+      case 'seek-progress':
+        progressRef.current = Math.min(1, Math.max(0, command.progress))
+        isCompletedRef.current = false
+        break
+      case 'seek-waypoint': {
+        const currentIndex = getDroneSimulationWaypointIndexAtProgress(
+          simulationPath,
+          progressRef.current,
+        )
+        const nextIndex =
+          command.direction === 'next'
+            ? Math.min(currentIndex + 1, simulationPath.waypoints.length - 1)
+            : Math.max(currentIndex - 1, 0)
+        progressRef.current = getDroneSimulationWaypointProgress(
+          simulationPath,
+          nextIndex,
+        )
+        isCompletedRef.current = false
+        break
+      }
+    }
+
+    publishTelemetry(
+      {
+        isPlaying: isPlayingRef.current,
+        isCompleted: isCompletedRef.current,
+        progress: progressRef.current,
+        currentWaypointIndex: getDroneSimulationWaypointIndexAtProgress(
+          simulationPath,
+          progressRef.current,
+        ),
+        waypointCount: simulationPath.waypoints.length,
+      },
+      true,
+    )
+  }, [command, publishTelemetry, session, simulationPath])
+
+  useFrame((_, delta) => {
+    if (!session || !simulationPath || !renderState) {
+      return
+    }
+
+    if (!inputLocked && isPlayingRef.current) {
+      if (pauseRemainingMsRef.current > 0) {
+        pauseRemainingMsRef.current = Math.max(
+          0,
+          pauseRemainingMsRef.current - delta * 1000,
+        )
+      } else if (loopRestartRemainingMsRef.current > 0) {
+        loopRestartRemainingMsRef.current = Math.max(
+          0,
+          loopRestartRemainingMsRef.current - delta * 1000,
+        )
+
+        if (loopRestartRemainingMsRef.current === 0) {
+          progressRef.current = 0
+          isCompletedRef.current = false
+          lastVisitedWaypointIndexRef.current = 0
+          trailPointsRef.current = trailPointsRef.current.slice(0, 1)
+        }
+      } else {
+        const durationMs =
+          getDroneSimulationDurationMs(
+            simulationPath.totalLength,
+            session.mode,
+            session.source,
+          ) /
+          Math.max(speed, 0.25)
+        const patternSpeedFactor =
+          session.patternId === 'spiral'
+            ? Math.max(0.72, 1 - progressRef.current * 0.34)
+            : 1
+        const deltaProgress =
+          ((delta * 1000) / Math.max(durationMs, 1)) * patternSpeedFactor
+        let nextProgress = progressRef.current + deltaProgress
+
+        if (session.mode === 'loop') {
+          if (nextProgress >= 1) {
+            nextProgress = 1
+            isCompletedRef.current = true
+            loopRestartRemainingMsRef.current = DRONE_SIMULATION_RESTART_DELAY_MS
+          }
+        } else if (nextProgress >= 1) {
+          nextProgress = 1
+          isPlayingRef.current = false
+          isCompletedRef.current = true
+        }
+
+        progressRef.current = nextProgress
+      }
+    }
+
+    if (activeCueRemainingMsRef.current > 0) {
+      activeCueRemainingMsRef.current = Math.max(
+        0,
+        activeCueRemainingMsRef.current - delta * 1000,
+      )
+
+      if (activeCueRemainingMsRef.current === 0) {
+        activeCueRef.current = null
+      }
+    }
+
+    const currentWaypointIndex = getDroneSimulationWaypointIndexAtProgress(
+      simulationPath,
+      progressRef.current,
+    )
+
+    if (currentWaypointIndex !== lastVisitedWaypointIndexRef.current) {
+      const reachedWaypoint = simulationPath.waypoints[currentWaypointIndex]
+
+      if (reachedWaypoint) {
+        pauseRemainingMsRef.current = Math.max(
+          pauseRemainingMsRef.current,
+          reachedWaypoint.pauseMs,
+        )
+        const cues = getWaypointSimulationActionCues(reachedWaypoint)
+        if (cues.length > 0) {
+          activeCueRef.current = cues[0].type
+          activeCueRemainingMsRef.current = Math.max(
+            cues[0].durationMs,
+            reachedWaypoint.pauseMs,
+          )
+        }
+        currentPulseWaypointIdRef.current = reachedWaypoint.id
+      }
+
+      lastVisitedWaypointIndexRef.current = currentWaypointIndex
+    }
+
+    if (
+      session.patternId === 'grid' &&
+      !gridPassPauseAppliedRef.current &&
+      currentWaypointIndex >= Math.floor(simulationPath.waypoints.length / 2)
+    ) {
+      pauseRemainingMsRef.current = Math.max(pauseRemainingMsRef.current, 500)
+      activeCueRef.current = 'grid_pass_two'
+      activeCueRemainingMsRef.current = 500
+      gridPassPauseAppliedRef.current = true
+    }
+
+    const sample = sampleDroneSimulationPath(simulationPath, progressRef.current)
+    const split = getDroneSimulationPathSplit(simulationPath, progressRef.current)
+    const nextScenePoint = toScenePositionFromVec3(sample.position)
+    const heading = toHeadingScenePoint(sample.heading)
+    const trailLimit =
+      simulationPath.waypoints.length > DRONE_SIMULATION_LONG_PATH_WAYPOINT_THRESHOLD
+        ? DRONE_SIMULATION_TRAIL_POINT_LIMIT_LONG_PATH
+        : DRONE_SIMULATION_TRAIL_POINT_LIMIT
+    const previousTrailPoint = trailPointsRef.current[trailPointsRef.current.length - 1]
+
+    if (
+      !previousTrailPoint ||
+      distanceBetweenScenePoints(previousTrailPoint, nextScenePoint) > 2.4
+    ) {
+      trailPointsRef.current = [...trailPointsRef.current, nextScenePoint].slice(-trailLimit)
+    }
+
+    setRenderState({
+      position: nextScenePoint,
+      heading,
+      travelled: split.travelled.map(toScenePositionFromVec3),
+      remaining: split.remaining.map(toScenePositionFromVec3),
+      currentWaypointIndex,
+      progress: progressRef.current,
+      currentCue: activeCueRef.current,
+      statusLabel: getSimulationStatusLabel({
+        patternId: session.patternId,
+        currentWaypointIndex,
+        waypointCount: simulationPath.waypoints.length,
+      }),
+      pulseWaypointId: currentPulseWaypointIdRef.current,
+      trailPoints: trailPointsRef.current,
+    })
+
+    const controls = orbitControlsRef.current
+    const lastOrbitInteractionAt = lastOrbitInteractionAtRef.current
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+
+    if (
+      followCamera &&
+      controls &&
+      camera instanceof THREE.PerspectiveCamera &&
+      now - lastOrbitInteractionAt > DRONE_SIMULATION_FOLLOW_RESUME_DELAY_MS
+    ) {
+      const desiredTarget =
+        simulationCameraProfile.fixedTarget?.clone() ??
+        getSimulationFollowTarget({
+          position: nextScenePoint,
+          heading,
+          profile: simulationCameraProfile,
+          missionCenter: simulationMissionCenter,
+        })
+      const desiredPosition =
+        simulationCameraProfile.fixedPosition?.clone() ??
+        getSimulationFollowCameraPosition({
+          desiredTarget,
+          heading,
+          currentCameraPosition: camera.position,
+          currentTarget: controls.target,
+          profile: simulationCameraProfile,
+        })
+      const offset = camera.position.clone().sub(controls.target)
+      const shouldRecoverAggressively = isSimulationCameraOutsideEnvelope(
+        offset,
+        simulationCameraProfile,
+      )
+      const targetAlpha =
+        1 - Math.exp(-delta * simulationCameraProfile.targetLerpSpeed)
+      const positionAlpha =
+        1 -
+        Math.exp(
+          -delta *
+            (shouldRecoverAggressively
+              ? simulationCameraProfile.recoveryLerpSpeed
+              : simulationCameraProfile.positionLerpSpeed),
+        )
+      controls.target.lerp(desiredTarget, targetAlpha)
+      camera.position.lerp(desiredPosition, positionAlpha)
+      controls.update()
+    }
+
+    publishTelemetry({
+      isPlaying: isPlayingRef.current,
+      isCompleted: isCompletedRef.current,
+      progress: progressRef.current,
+      currentWaypointIndex,
+      waypointCount: simulationPath.waypoints.length,
+    })
+  })
+
+  if (!session || !simulationPath || !renderState) {
+    return null
+  }
+
+  const showShadow =
+    simulationPath.waypoints.length <= DRONE_SIMULATION_LONG_PATH_WAYPOINT_THRESHOLD
+  const orbitCenter =
+    session.patternId === 'orbit'
+      ? polygonCentroid(session.waypoints)
+      : null
+
+  return (
+    <>
+      {renderState.travelled.length >= 2 && (
+        <Line
+          points={renderState.travelled}
+          color={color}
+          transparent
+          opacity={0.92}
+          lineWidth={4.2}
+        />
+      )}
+
+      {renderState.remaining.length >= 2 && (
+        <Line
+          points={renderState.remaining}
+          color={color}
+          transparent
+          opacity={0.28}
+          dashed
+          dashSize={4}
+          gapSize={3}
+          lineWidth={2.6}
+        />
+      )}
+
+      {orbitCenter && (
+        <Line
+          points={[
+            [orbitCenter.x, altitude + PATTERN_OVERLAY_OFFSET + 0.08, orbitCenter.y],
+            renderState.position,
+          ]}
+          color={color}
+          transparent
+          opacity={0.4}
+          dashed
+          dashSize={3}
+          gapSize={3}
+          lineWidth={1.8}
+        />
+      )}
+
+      {renderState.pulseWaypointId !== null &&
+        session.waypoints
+          .filter((waypoint) => waypoint.id === renderState.pulseWaypointId)
+          .map((waypoint) => (
+            <mesh
+              key={`simulation-pulse-${waypoint.id}`}
+              rotation-x={-Math.PI / 2}
+              position={[waypoint.x, waypoint.z + 0.2, waypoint.y]}
+            >
+              <ringGeometry args={[3.2, 4.4, 36]} />
+              <meshBasicMaterial color={color} transparent opacity={0.28} />
+            </mesh>
+          ))}
+
+      {renderState.currentCue && (
+        <Billboard position={[renderState.position[0], renderState.position[1] + 12, renderState.position[2]]} follow>
+          <mesh>
+            <planeGeometry args={[18, 5]} />
+            <meshBasicMaterial color="#ffffff" transparent opacity={0.94} />
+          </mesh>
+          <Text
+            position={[0, 0, 0.05]}
+            fontSize={1.9}
+            color={color}
+            anchorX="center"
+            anchorY="middle"
+          >
+            {formatSimulationCueLabel(renderState.currentCue)}
+          </Text>
+        </Billboard>
+      )}
+
+      {renderState.statusLabel && (
+        <Billboard position={[renderState.position[0], renderState.position[1] + 18, renderState.position[2]]} follow>
+          <mesh>
+            <planeGeometry args={[16, 4.4]} />
+            <meshBasicMaterial color="#111827" transparent opacity={0.72} />
+          </mesh>
+          <Text
+            position={[0, 0, 0.05]}
+            fontSize={1.65}
+            color="#f8fafc"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {renderState.statusLabel}
+          </Text>
+        </Billboard>
+      )}
+
+      <DroneGhost
+        position={renderState.position}
+        heading={renderState.heading}
+        color={color}
+        trailPoints={renderState.trailPoints}
+        visible
+        showShadow={showShadow}
+        lift={0}
+        emphasized={session.mode === 'one-shot'}
+      />
     </>
   )
 }
@@ -3890,4 +4700,256 @@ function getPointBounds(points: MissionPoint[]) {
       maxY: Number.NEGATIVE_INFINITY,
     },
   )
+}
+
+function toScenePositionFromVec3(point: { x: number; y: number; z: number }): ScenePoint {
+  return [point.x, point.y, point.z]
+}
+
+function toHeadingScenePoint(point: { x: number; y: number; z: number }): ScenePoint {
+  return [point.x, point.y, point.z]
+}
+
+function distanceBetweenScenePoints(a: ScenePoint, b: ScenePoint): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+}
+
+function formatSimulationCueLabel(actionType: string): string {
+  switch (actionType) {
+    case 'take_photo':
+      return 'Camera pass'
+    case 'record_video':
+      return 'REC'
+    case 'drop_payload':
+      return 'Payload drop'
+    case 'fire_suppress':
+      return 'Suppress'
+    case 'change_altitude':
+      return 'Altitude change'
+    case 'set_gimbal':
+      return 'Gimbal set'
+    case 'trigger_sensor':
+      return 'Sensor trigger'
+    case 'grid_pass_two':
+      return 'Pass 2/2'
+    default:
+      return 'Hover'
+  }
+}
+
+function getSimulationCameraProfile(
+  totalPathLength: number,
+  patternId: FlightPatternId,
+  source: DroneSimulationSession['source'],
+): SimulationCameraProfile {
+  if (source === 'preview') {
+    const fixedPosition = new THREE.Vector3(...DRONE_SIMULATION_PREVIEW_CAMERA_POSITION)
+    const fixedTarget = new THREE.Vector3(...DRONE_SIMULATION_PREVIEW_CAMERA_TARGET)
+    const fixedOffset = fixedPosition.clone().sub(fixedTarget)
+    const fixedDistance = fixedOffset.length()
+    const fixedPolarAngle =
+      fixedDistance === 0
+        ? DRONE_SIMULATION_CAMERA_DESIRED_POLAR_ANGLE
+        : Math.acos(THREE.MathUtils.clamp(fixedOffset.y / fixedDistance, -1, 1))
+
+    return {
+      desiredDistance: fixedDistance,
+      minDistance: Math.max(MIN_CAMERA_DISTANCE, fixedDistance - 48),
+      maxDistance: Math.min(MAX_CAMERA_DISTANCE, fixedDistance + 48),
+      desiredPolarAngle: fixedPolarAngle,
+      minPolarAngle: Math.max(DEFAULT_MIN_POLAR_ANGLE, fixedPolarAngle - 0.16),
+      maxPolarAngle: Math.min(DEFAULT_MAX_POLAR_ANGLE, fixedPolarAngle + 0.16),
+      desiredFov: DRONE_SIMULATION_PREVIEW_CAMERA_FOV,
+      lookAheadDistance: 0,
+      missionCenterBlend: 1,
+      heightBias: 0,
+      targetLerpSpeed: DRONE_SIMULATION_CAMERA_TARGET_LERP_SPEED * 0.9,
+      positionLerpSpeed: DRONE_SIMULATION_CAMERA_POSITION_LERP_SPEED * 0.9,
+      recoveryLerpSpeed: DRONE_SIMULATION_CAMERA_RECOVERY_LERP_SPEED,
+      fixedPosition,
+      fixedTarget,
+    }
+  }
+
+  const overviewBias =
+    patternId === 'coverage' || patternId === 'grid' || patternId === 'corridor'
+      ? 1
+      : patternId === 'spiral'
+        ? 0.82
+        : patternId === 'perimeter'
+          ? 0.68
+          : 0.58
+  const maxDistance =
+    patternId === 'corridor'
+      ? DRONE_SIMULATION_CAMERA_MAX_DISTANCE
+      : DRONE_SIMULATION_CAMERA_MAX_DISTANCE - 10
+  const desiredDistance = THREE.MathUtils.clamp(
+    104 +
+      totalPathLength *
+        (patternId === 'corridor'
+          ? 0.072
+          : patternId === 'coverage' || patternId === 'grid'
+            ? 0.058
+            : 0.048),
+    DRONE_SIMULATION_CAMERA_MIN_DISTANCE,
+    maxDistance,
+  )
+  const desiredPolarAngle =
+    patternId === 'corridor' || patternId === 'coverage' || patternId === 'grid'
+      ? DRONE_SIMULATION_CAMERA_DESIRED_POLAR_ANGLE - 0.05
+      : patternId === 'orbit'
+        ? DRONE_SIMULATION_CAMERA_DESIRED_POLAR_ANGLE - 0.01
+        : DRONE_SIMULATION_CAMERA_DESIRED_POLAR_ANGLE - 0.02
+  const lookAheadDistance = THREE.MathUtils.clamp(
+    desiredDistance * (patternId === 'corridor' ? 0.14 : 0.1),
+    8,
+    18,
+  )
+
+  return {
+    desiredDistance,
+    minDistance: DRONE_SIMULATION_CAMERA_MIN_DISTANCE,
+    maxDistance,
+    desiredPolarAngle,
+    minPolarAngle: DRONE_SIMULATION_CAMERA_MIN_POLAR_ANGLE,
+    maxPolarAngle: DRONE_SIMULATION_CAMERA_MAX_POLAR_ANGLE,
+    desiredFov:
+      patternId === 'coverage' || patternId === 'grid' || patternId === 'corridor'
+        ? DRONE_SIMULATION_CAMERA_DESIRED_FOV
+        : DRONE_SIMULATION_CAMERA_DESIRED_FOV - 1,
+    lookAheadDistance,
+    missionCenterBlend:
+      patternId === 'coverage' || patternId === 'grid' || patternId === 'corridor'
+        ? 0.42
+        : patternId === 'spiral'
+          ? 0.34
+          : 0.28,
+    heightBias: patternId === 'orbit' ? 5 : 4 + overviewBias,
+    targetLerpSpeed: DRONE_SIMULATION_CAMERA_TARGET_LERP_SPEED,
+    positionLerpSpeed: DRONE_SIMULATION_CAMERA_POSITION_LERP_SPEED,
+    recoveryLerpSpeed: DRONE_SIMULATION_CAMERA_RECOVERY_LERP_SPEED,
+  }
+}
+
+function getSimulationFollowTarget({
+  position,
+  heading,
+  profile,
+  missionCenter,
+}: {
+  position: ScenePoint
+  heading: ScenePoint
+  profile: SimulationCameraProfile
+  missionCenter: THREE.Vector3 | null
+}): THREE.Vector3 {
+  const focusDirection = getSimulationFlatHeadingVector(heading)
+  const lookAheadTarget = new THREE.Vector3(
+    position[0] + focusDirection.x * profile.lookAheadDistance,
+    position[1],
+    position[2] + focusDirection.z * profile.lookAheadDistance,
+  )
+
+  if (!missionCenter) {
+    return lookAheadTarget
+  }
+
+  return lookAheadTarget.lerp(missionCenter, profile.missionCenterBlend)
+}
+
+function getSimulationFollowCameraPosition({
+  desiredTarget,
+  heading,
+  currentCameraPosition,
+  currentTarget,
+  profile,
+}: {
+  desiredTarget: THREE.Vector3
+  heading: ScenePoint
+  currentCameraPosition: THREE.Vector3
+  currentTarget: THREE.Vector3
+  profile: SimulationCameraProfile
+}): THREE.Vector3 {
+  const focusDirection = getSimulationFlatHeadingVector(
+    heading,
+    currentCameraPosition.clone().sub(currentTarget),
+  )
+  const horizontalDistance =
+    Math.sin(profile.desiredPolarAngle) * profile.desiredDistance
+  const verticalDistance =
+    Math.cos(profile.desiredPolarAngle) * profile.desiredDistance + profile.heightBias
+  const desiredOffset = new THREE.Vector3(
+    -focusDirection.x * horizontalDistance,
+    verticalDistance,
+    -focusDirection.z * horizontalDistance,
+  )
+
+  return desiredTarget.clone().add(desiredOffset)
+}
+
+function isSimulationCameraOutsideEnvelope(
+  offset: THREE.Vector3,
+  profile: SimulationCameraProfile,
+): boolean {
+  const distance = offset.length()
+
+  if (distance === 0) {
+    return true
+  }
+
+  const polarAngle = Math.acos(
+    THREE.MathUtils.clamp(offset.y / distance, -1, 1),
+  )
+
+  return (
+    distance < profile.minDistance ||
+    distance > profile.maxDistance ||
+    polarAngle < profile.minPolarAngle ||
+    polarAngle > profile.maxPolarAngle
+  )
+}
+
+function getSimulationFlatHeadingVector(
+  heading: ScenePoint,
+  fallbackVector?: THREE.Vector3,
+): THREE.Vector3 {
+  const vector = new THREE.Vector3(heading[0], 0, heading[2])
+
+  if (vector.lengthSq() > 0.0001) {
+    return vector.normalize()
+  }
+
+  if (fallbackVector) {
+    fallbackVector.setY(0)
+
+    if (fallbackVector.lengthSq() > 0.0001) {
+      return fallbackVector.normalize()
+    }
+  }
+
+  return new THREE.Vector3(0.72, 0, 0.72).normalize()
+}
+
+function getSimulationStatusLabel({
+  patternId,
+  currentWaypointIndex,
+  waypointCount,
+}: {
+  patternId: FlightPatternId
+  currentWaypointIndex: number
+  waypointCount: number
+}): string | null {
+  if (waypointCount <= 1) {
+    return null
+  }
+
+  switch (patternId) {
+    case 'coverage':
+      return `Line ${Math.min(Math.floor(currentWaypointIndex / 2) + 1, Math.ceil(waypointCount / 2))}/${Math.max(Math.ceil(waypointCount / 2), 1)}`
+    case 'grid':
+      return currentWaypointIndex >= Math.floor(waypointCount / 2) ? 'Pass 2/2' : 'Pass 1/2'
+    case 'corridor':
+      return 'Corridor run'
+    default:
+      return null
+  }
 }
