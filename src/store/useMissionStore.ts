@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  PathSegment,
   WaypointDensityConfig,
   WaypointRole,
 } from '../lib/waypointDensityModels'
@@ -76,6 +77,8 @@ interface MissionState {
   generatedPatternId: FlightPatternId | null
   generatedPatternMeta: FlightPatternMissionMeta | null
   generatedSegments: Array<[Vec2, Vec2]>
+  generatedAnchorWaypoints: MissionWaypoint[]
+  generatedPathSegments: PathSegment[]
   generatedClosed: boolean
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
@@ -165,6 +168,8 @@ function clearDerivedMissionState() {
     generatedPatternId: null as FlightPatternId | null,
     generatedPatternMeta: null as FlightPatternMissionMeta | null,
     generatedSegments: [] as Array<[Vec2, Vec2]>,
+    generatedAnchorWaypoints: [] as MissionWaypoint[],
+    generatedPathSegments: [] as PathSegment[],
     generatedClosed: false,
     waypoints: [] as MissionWaypoint[],
     selectedWaypointId: null as number | null,
@@ -204,6 +209,8 @@ const initialState = {
   generatedPatternId: null as FlightPatternId | null,
   generatedPatternMeta: null as FlightPatternMissionMeta | null,
   generatedSegments: [] as Array<[Vec2, Vec2]>,
+  generatedAnchorWaypoints: [] as MissionWaypoint[],
+  generatedPathSegments: [] as PathSegment[],
   generatedClosed: false,
   waypoints: [] as MissionWaypoint[],
   selectedWaypointId: null as number | null,
@@ -418,6 +425,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       generatedPatternId: mission.patternId,
       generatedPatternMeta: mission.meta,
       generatedSegments: mission.segments,
+      generatedAnchorWaypoints: mission.anchorWaypoints,
+      generatedPathSegments: mission.pathSegments,
       generatedClosed: mission.closed,
       waypoints: mission.waypoints,
       activeExclusionZoneId: null,

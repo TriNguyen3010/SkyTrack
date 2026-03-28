@@ -141,6 +141,7 @@ function App() {
   const exclusionZones = useMissionStore((state) => state.exclusionZones)
   const activeExclusionZoneId = useMissionStore((state) => state.activeExclusionZoneId)
   const drawingTarget = useMissionStore((state) => state.drawingTarget)
+  const waypointDensity = useMissionStore((state) => state.waypointDensity)
   const generatedPatternId = useMissionStore((state) => state.generatedPatternId)
   const generatedPatternMeta = useMissionStore((state) => state.generatedPatternMeta)
   const generatedSegments = useMissionStore((state) => state.generatedSegments)
@@ -293,8 +294,9 @@ function App() {
       points,
       exclusionZones: enabledExclusionZones,
       paramsByPattern: patternParamsByPattern,
+      waypointDensity,
     }),
-    [enabledExclusionZones, patternParamsByPattern, points],
+    [enabledExclusionZones, patternParamsByPattern, points, waypointDensity],
   )
   const activePreviewMission = useMemo(
     () =>
