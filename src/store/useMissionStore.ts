@@ -20,11 +20,19 @@ import {
 export type OperationMode = 'simulation' | 'deployment'
 export type EditorTab = 'design' | 'code'
 export type MissionStage = 'idle' | 'setup' | 'drawing' | 'editing' | 'generated'
+export type DrawingTarget = 'boundary' | 'exclusion'
 
 export interface MissionPoint {
   id: number
   x: number
   y: number
+}
+
+export interface ExclusionZone {
+  id: number
+  points: MissionPoint[]
+  label: string
+  enabled: boolean
 }
 
 export interface MissionWaypoint {
@@ -47,6 +55,9 @@ interface MissionState {
   homePoint: Vec3
   safetyPresetId: string
   points: MissionPoint[]
+  exclusionZones: ExclusionZone[]
+  activeExclusionZoneId: number | null
+  drawingTarget: DrawingTarget
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
   startWaypointId: number | null
@@ -61,6 +72,12 @@ interface MissionState {
   setDroneProfileOverrides: (overrides: DroneProfileOverrides | null) => void
   setHomePoint: (point: Vec3) => void
   setSafetyPresetId: (id: string) => void
+  addExclusionZone: () => number | null
+  removeExclusionZone: (zoneId: number) => void
+  renameExclusionZone: (zoneId: number, label: string) => void
+  toggleExclusionZone: (zoneId: number) => void
+  setActiveExclusionZone: (zoneId: number | null) => void
+  setDrawingTarget: (target: DrawingTarget) => void
   enterSetup: () => void
   cancelSetup: () => void
   startDrawing: () => void
@@ -72,6 +89,9 @@ interface MissionState {
   resetMission: () => void
   addPoint: (x: number, y: number) => void
   updatePoint: (id: number, x: number, y: number) => void
+  addExclusionPoint: (zoneId: number, x: number, y: number) => void
+  updateExclusionPoint: (zoneId: number, pointId: number, x: number, y: number) => void
+  closeExclusionZone: (zoneId: number) => void
   selectWaypoint: (id: number | null) => void
   setStartWaypoint: (id: number | null) => void
   setHoveredWaypoint: (id: number | null) => void
@@ -99,6 +119,45 @@ interface MissionState {
 const DEFAULT_ALTITUDE = 50
 const DEFAULT_SPACING = 10
 const DEFAULT_ORIENTATION = 0
+const EXCLUSION_LABEL_PREFIX = 'Excluded area'
+
+function getNextEntityId(items: Array<{ id: number }>): number {
+  return items.reduce((highest, item) => Math.max(highest, item.id), 0) + 1
+}
+
+function getExclusionZoneLabel(index: number): string {
+  return `${EXCLUSION_LABEL_PREFIX} ${index}`
+}
+
+function createExclusionZone(zoneId: number, labelIndex: number): ExclusionZone {
+  return {
+    id: zoneId,
+    points: [],
+    label: getExclusionZoneLabel(labelIndex),
+    enabled: true,
+  }
+}
+
+function clearDerivedMissionState() {
+  return {
+    waypoints: [] as MissionWaypoint[],
+    selectedWaypointId: null as number | null,
+    startWaypointId: null as number | null,
+    hoveredWaypointId: null as number | null,
+    bulkAssignActionType: null as MissionWaypointActionType | null,
+  }
+}
+
+function getDrawingCancelStage(state: Pick<MissionState, 'points'>): MissionStage {
+  return state.points.length >= 3 ? 'editing' : 'setup'
+}
+
+function removeExclusionZoneById(
+  zones: ExclusionZone[],
+  zoneId: number,
+): ExclusionZone[] {
+  return zones.filter((zone) => zone.id !== zoneId)
+}
 
 const initialState = {
   operationMode: 'simulation' as OperationMode,
@@ -112,6 +171,9 @@ const initialState = {
   homePoint: { ...DEFAULT_HOME_POINT } as Vec3,
   safetyPresetId: DEFAULT_SAFETY_PRESET_ID,
   points: [] as MissionPoint[],
+  exclusionZones: [] as ExclusionZone[],
+  activeExclusionZoneId: null as number | null,
+  drawingTarget: 'boundary' as DrawingTarget,
   waypoints: [] as MissionWaypoint[],
   selectedWaypointId: null as number | null,
   startWaypointId: null as number | null,
@@ -119,7 +181,7 @@ const initialState = {
   bulkAssignActionType: null as MissionWaypointActionType | null,
 }
 
-export const useMissionStore = create<MissionState>((set) => ({
+export const useMissionStore = create<MissionState>((set, get) => ({
   ...initialState,
   setOperationMode: (mode) => set({ operationMode: mode }),
   setEditorTab: (tab) => set({ editorTab: tab }),
@@ -143,63 +205,164 @@ export const useMissionStore = create<MissionState>((set) => ({
     set({
       safetyPresetId: id,
     }),
+  addExclusionZone: () => {
+    const state = get()
+
+    if (state.points.length < 3) {
+      return null
+    }
+
+    const zoneId = getNextEntityId(state.exclusionZones)
+
+    set((current) => ({
+      stage: 'drawing',
+      drawingTarget: 'exclusion',
+      activeExclusionZoneId: zoneId,
+      exclusionZones: [
+        ...current.exclusionZones,
+        createExclusionZone(zoneId, current.exclusionZones.length + 1),
+      ],
+      ...clearDerivedMissionState(),
+    }))
+
+    return zoneId
+  },
+  removeExclusionZone: (zoneId) =>
+    set((state) => {
+      const nextZones = removeExclusionZoneById(state.exclusionZones, zoneId)
+      const removedActiveZone = state.activeExclusionZoneId === zoneId
+
+      return {
+        exclusionZones: nextZones,
+        activeExclusionZoneId: removedActiveZone ? null : state.activeExclusionZoneId,
+        drawingTarget:
+          removedActiveZone && state.drawingTarget === 'exclusion'
+            ? 'boundary'
+            : state.drawingTarget,
+        stage:
+          removedActiveZone && state.stage === 'drawing'
+            ? getDrawingCancelStage(state)
+            : state.stage,
+        ...clearDerivedMissionState(),
+      }
+    }),
+  renameExclusionZone: (zoneId, label) =>
+    set((state) => ({
+      exclusionZones: state.exclusionZones.map((zone) =>
+        zone.id === zoneId
+          ? {
+              ...zone,
+              label: label.trim() || zone.label,
+            }
+          : zone,
+      ),
+    })),
+  toggleExclusionZone: (zoneId) =>
+    set((state) => ({
+      exclusionZones: state.exclusionZones.map((zone) =>
+        zone.id === zoneId ? { ...zone, enabled: !zone.enabled } : zone,
+      ),
+      ...clearDerivedMissionState(),
+    })),
+  setActiveExclusionZone: (zoneId) =>
+    set((state) => ({
+      activeExclusionZoneId:
+        zoneId === null || state.exclusionZones.some((zone) => zone.id === zoneId)
+          ? zoneId
+          : state.activeExclusionZoneId,
+    })),
+  setDrawingTarget: (target) =>
+    set((state) => ({
+      drawingTarget: target,
+      activeExclusionZoneId:
+        target === 'boundary' ? null : state.activeExclusionZoneId,
+    })),
   enterSetup: () =>
     set({
       stage: 'setup',
       points: [],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+      exclusionZones: [],
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
+      ...clearDerivedMissionState(),
     }),
   cancelSetup: () =>
     set({
       stage: 'idle',
       points: [],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+      exclusionZones: [],
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
+      ...clearDerivedMissionState(),
     }),
   startDrawing: () =>
     set({
       stage: 'drawing',
       points: [],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
+      ...clearDerivedMissionState(),
     }),
   cancelDrawing: () =>
-    set({
-      stage: 'setup',
-      points: [],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+    set((state) => {
+      if (state.drawingTarget === 'exclusion') {
+        const nextZones =
+          state.activeExclusionZoneId === null
+            ? state.exclusionZones
+            : removeExclusionZoneById(state.exclusionZones, state.activeExclusionZoneId)
+
+        return {
+          stage: getDrawingCancelStage(state),
+          exclusionZones: nextZones,
+          activeExclusionZoneId: null,
+          drawingTarget: 'boundary',
+          ...clearDerivedMissionState(),
+        }
+      }
+
+      return {
+        stage: 'setup',
+        points: [],
+        exclusionZones: [],
+        activeExclusionZoneId: null,
+        drawingTarget: 'boundary',
+        ...clearDerivedMissionState(),
+      }
     }),
   closePolygon: () =>
     set((state) =>
-      state.points.length >= 3
-        ? {
-            stage: 'editing',
-            waypoints: [],
-            selectedWaypointId: null,
-            startWaypointId: null,
-            hoveredWaypointId: null,
-            bulkAssignActionType: null,
-          }
-        : state,
+      state.drawingTarget === 'exclusion'
+        ? (() => {
+            const activeZone = state.exclusionZones.find(
+              (zone) => zone.id === state.activeExclusionZoneId,
+            )
+
+            if (!activeZone || activeZone.points.length < 3) {
+              return state
+            }
+
+            return {
+              stage: 'editing' as MissionStage,
+              activeExclusionZoneId: null,
+              drawingTarget: 'boundary' as DrawingTarget,
+              ...clearDerivedMissionState(),
+            }
+          })()
+        : state.points.length >= 3
+          ? {
+              stage: 'editing',
+              activeExclusionZoneId: null,
+              drawingTarget: 'boundary',
+              ...clearDerivedMissionState(),
+            }
+          : state,
     ),
   generatePath: (waypoints) =>
     set((state) => ({
       stage: 'generated',
       waypoints,
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
       selectedWaypointId: null,
       startWaypointId: waypoints.some(
         (waypoint) => waypoint.id === state.startWaypointId,
@@ -212,45 +375,124 @@ export const useMissionStore = create<MissionState>((set) => ({
   editGeneratedPath: () =>
     set({
       stage: 'editing',
-      waypoints: [],
-      selectedWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
+      ...clearDerivedMissionState(),
     }),
   redrawMission: () =>
-    set({
+    set((state) => ({
       stage: 'drawing',
       points: [],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
-    }),
+      activeExclusionZoneId: null,
+      drawingTarget: 'boundary',
+      exclusionZones: state.exclusionZones,
+      ...clearDerivedMissionState(),
+    })),
   resetMission: () =>
     set({
       ...initialState,
     }),
   addPoint: (x, y) =>
-    set((state) => ({
-      points: [...state.points, { id: state.points.length + 1, x, y }],
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
-    })),
+    set((state) => {
+      if (state.drawingTarget === 'exclusion') {
+        if (state.activeExclusionZoneId === null) {
+          return state
+        }
+
+        return {
+          exclusionZones: state.exclusionZones.map((zone) =>
+            zone.id === state.activeExclusionZoneId
+              ? {
+                  ...zone,
+                  points: [
+                    ...zone.points,
+                    { id: getNextEntityId(zone.points), x, y },
+                  ],
+                }
+              : zone,
+          ),
+          ...clearDerivedMissionState(),
+        }
+      }
+
+      return {
+        points: [...state.points, { id: getNextEntityId(state.points), x, y }],
+        ...clearDerivedMissionState(),
+      }
+    }),
   updatePoint: (id, x, y) =>
+    set((state) => {
+      if (state.drawingTarget === 'exclusion') {
+        if (state.activeExclusionZoneId === null) {
+          return state
+        }
+
+        return {
+          exclusionZones: state.exclusionZones.map((zone) =>
+            zone.id === state.activeExclusionZoneId
+              ? {
+                  ...zone,
+                  points: zone.points.map((point) =>
+                    point.id === id ? { ...point, x, y } : point,
+                  ),
+                }
+              : zone,
+          ),
+          ...clearDerivedMissionState(),
+        }
+      }
+
+      return {
+        points: state.points.map((point) =>
+          point.id === id ? { ...point, x, y } : point,
+        ),
+        ...clearDerivedMissionState(),
+      }
+    }),
+  addExclusionPoint: (zoneId, x, y) =>
     set((state) => ({
-      points: state.points.map((point) =>
-        point.id === id ? { ...point, x, y } : point,
+      exclusionZones: state.exclusionZones.map((zone) =>
+        zone.id === zoneId
+          ? {
+              ...zone,
+              points: [
+                ...zone.points,
+                { id: getNextEntityId(zone.points), x, y },
+              ],
+            }
+          : zone,
       ),
-      waypoints: [],
-      selectedWaypointId: null,
-      startWaypointId: null,
-      hoveredWaypointId: null,
-      bulkAssignActionType: null,
+      ...clearDerivedMissionState(),
     })),
+  updateExclusionPoint: (zoneId, pointId, x, y) =>
+    set((state) => ({
+      exclusionZones: state.exclusionZones.map((zone) =>
+        zone.id === zoneId
+          ? {
+              ...zone,
+              points: zone.points.map((point) =>
+                point.id === pointId ? { ...point, x, y } : point,
+              ),
+            }
+          : zone,
+      ),
+      ...clearDerivedMissionState(),
+    })),
+  closeExclusionZone: (zoneId) =>
+    set((state) => {
+      const zone = state.exclusionZones.find((entry) => entry.id === zoneId)
+
+      if (!zone || zone.points.length < 3) {
+        return state
+      }
+
+      return {
+        stage: 'editing',
+        activeExclusionZoneId: null,
+        drawingTarget: 'boundary',
+        ...clearDerivedMissionState(),
+      }
+    }),
   selectWaypoint: (id) => set({ selectedWaypointId: id }),
   setStartWaypoint: (id) => set({ startWaypointId: id }),
   setHoveredWaypoint: (id) => set({ hoveredWaypointId: id }),
