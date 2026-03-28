@@ -64,6 +64,7 @@ import {
   createInitialPatternParams,
   FLIGHT_PATTERN_OPTIONS,
   getFlightPatternDefinition,
+  getWaypointDensityConstraints,
   getFlightPatternOption,
   type FlightPatternMissionMeta,
   type FlightPatternId,
@@ -107,6 +108,8 @@ import type {
 } from './lib/batteryModels'
 import {
   computeWaypointDensityMetrics,
+  getProtectedWaypointCount,
+  getWaypointCountFloor,
 } from './lib/waypointDensity'
 import {
   countIntermediateWaypointActions,
@@ -428,6 +431,54 @@ function App() {
       }),
     [generatedAnchorWaypoints, generatedPathSegments, waypoints],
   )
+  const generatedDensityConstraints = useMemo(
+    () =>
+      getWaypointDensityConstraints(
+        displayPatternId,
+        stage === 'generated' ? generatedClosed : false,
+      ),
+    [displayPatternId, generatedClosed, stage],
+  )
+  const generatedProtectedWaypointCount = useMemo(
+    () =>
+      getProtectedWaypointCount({
+        anchors: generatedAnchorWaypoints,
+        constraints: generatedDensityConstraints,
+        protectActioned: waypointDensity.protectActioned !== false,
+      }),
+    [
+      generatedAnchorWaypoints,
+      generatedDensityConstraints,
+      waypointDensity.protectActioned,
+    ],
+  )
+  const generatedSimplifyFloor = useMemo(
+    () =>
+      getWaypointCountFloor({
+        anchors: generatedAnchorWaypoints,
+        constraints: generatedDensityConstraints,
+        protectActioned: waypointDensity.protectActioned !== false,
+      }),
+    [
+      generatedAnchorWaypoints,
+      generatedDensityConstraints,
+      waypointDensity.protectActioned,
+    ],
+  )
+  const generatedDensityBaseCount = generatedDensityMetrics.anchorCount
+  const generatedDensityCountFloor =
+    waypointDensity.mode === 'simplify'
+      ? generatedSimplifyFloor
+      : generatedDensityMetrics.minimumCount
+  const generatedDensityCountCeiling =
+    waypointDensity.mode === 'simplify'
+      ? Math.max(generatedDensityBaseCount, generatedDensityCountFloor)
+      : Math.max(
+          generatedDensityMetrics.maximumCount ?? 0,
+          generatedDensityMetrics.minimumCount * 3,
+          generatedDensityMetrics.totalCount,
+          waypointDensity.targetCount ?? generatedDensityMetrics.totalCount,
+        )
   const densitySignature = useMemo(
     () => serializeWaypointDensityConfig(waypointDensity),
     [waypointDensity],
@@ -443,6 +494,11 @@ function App() {
     stage === 'generated' &&
     generatedDensitySignature !== null &&
     densitySignature !== generatedDensitySignature
+  const pendingDensityPreviewMission = useMemo(
+    () =>
+      stage === 'generated' && isGeneratedDensityPending ? selectedPatternMission : null,
+    [isGeneratedDensityPending, selectedPatternMission, stage],
+  )
   const selectedWaypointBatteryEstimate = useMemo(
     () =>
       selectedWaypoint && generatedBatteryReport
@@ -1158,6 +1214,27 @@ function App() {
     mode: 'auto' | 'count' | 'spacing' | 'simplify',
   ) {
     setWaypointDensityMode(mode)
+
+    if (mode === 'count') {
+      setTargetWaypointCount(
+        Math.max(
+          generatedDensityMetrics.anchorCount,
+          waypointDensity.targetCount ?? generatedDensityMetrics.totalCount,
+        ),
+      )
+      return
+    }
+
+    if (mode === 'simplify') {
+      const requestedCount = waypointDensity.targetCount ?? generatedDensityMetrics.totalCount
+
+      setTargetWaypointCount(
+        Math.max(
+          generatedDensityCountFloor,
+          Math.min(requestedCount, generatedDensityBaseCount),
+        ),
+      )
+    }
   }
 
   function handleWaypointDensityCountChange(value: number) {
@@ -1166,11 +1243,15 @@ function App() {
     }
 
     const clampedValue =
-      generatedDensityMetrics.maximumCount !== null
-        ? Math.min(value, generatedDensityMetrics.maximumCount)
-        : value
+      waypointDensity.mode === 'simplify'
+        ? Math.min(value, generatedDensityCountCeiling)
+        : generatedDensityMetrics.maximumCount !== null
+          ? Math.min(value, generatedDensityMetrics.maximumCount)
+          : value
 
-    setTargetWaypointCount(Math.max(generatedDensityMetrics.minimumCount, clampedValue))
+    setTargetWaypointCount(
+      Math.max(generatedDensityCountFloor, clampedValue),
+    )
   }
 
   function handleWaypointDensitySpacingChange(value: number) {
@@ -1427,6 +1508,16 @@ function App() {
               drawingPoints={activeDrawingPoints}
               patternSegments={displayPatternSegments}
               waypoints={orderedWaypoints}
+              pendingDensityPreviewWaypoints={
+                waypointDensity.mode === 'simplify'
+                  ? pendingDensityPreviewMission?.waypoints ?? null
+                  : null
+              }
+              pendingDensityPreviewAnchorWaypoints={
+                waypointDensity.mode === 'simplify'
+                  ? pendingDensityPreviewMission?.anchorWaypoints ?? null
+                  : null
+              }
               batteryReport={generatedBatteryReport}
               selectedWaypointId={selectedWaypointId}
               isClosedLoopMission={isClosedMissionLoop}
@@ -2308,6 +2399,9 @@ function App() {
                 <WaypointDensityPanel
                   config={waypointDensity}
                   metrics={generatedDensityMetrics}
+                  countFloor={generatedDensityCountFloor}
+                  countCeiling={generatedDensityCountCeiling}
+                  protectedCount={generatedProtectedWaypointCount}
                   isExpanded={isWaypointDensityExpanded}
                   isPending={isGeneratedDensityPending}
                   onToggleExpanded={() =>
@@ -3832,8 +3926,16 @@ function serializeWaypointDensityConfig(config: {
   mode: string
   targetCount: number | null
   targetSpacing: number | null
+  simplifyTolerance?: number | null
+  protectActioned?: boolean
 }): string {
-  return JSON.stringify(config)
+  return JSON.stringify({
+    mode: config.mode,
+    targetCount: config.targetCount,
+    targetSpacing: config.targetSpacing,
+    simplifyTolerance: config.simplifyTolerance ?? null,
+    protectActioned: config.protectActioned ?? true,
+  })
 }
 
 export default App

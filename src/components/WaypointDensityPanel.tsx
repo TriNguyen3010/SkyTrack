@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   WaypointDensityConfig,
   WaypointDensityMetrics,
@@ -7,6 +7,9 @@ import type {
 interface WaypointDensityPanelProps {
   config: WaypointDensityConfig
   metrics: WaypointDensityMetrics
+  countFloor: number
+  countCeiling: number
+  protectedCount: number
   isExpanded: boolean
   isPending: boolean
   onToggleExpanded: () => void
@@ -31,6 +34,9 @@ function getModeLabel(mode: WaypointDensityConfig['mode']): string {
 export function WaypointDensityPanel({
   config,
   metrics,
+  countFloor,
+  countCeiling,
+  protectedCount,
   isExpanded,
   isPending,
   onToggleExpanded,
@@ -39,43 +45,45 @@ export function WaypointDensityPanel({
   onSpacingChange,
 }: WaypointDensityPanelProps) {
   const [draftCountValue, setDraftCountValue] = useState('')
+  const isCountMode = config.mode === 'count'
+  const isSimplifyMode = config.mode === 'simplify'
+  const usesCountInput = isCountMode || isSimplifyMode
   const totalCountValue =
-    config.mode === 'count' && config.targetCount !== null
+    usesCountInput && config.targetCount !== null
       ? config.targetCount
       : metrics.totalCount
   const spacingValue =
     config.mode === 'spacing' && config.targetSpacing !== null
       ? config.targetSpacing
       : metrics.effectiveSpacing ?? 0
-  const inputMax = useMemo(
-    () =>
-      Math.max(
+  const inputMin = usesCountInput ? countFloor : metrics.minimumCount
+  const inputMax = isSimplifyMode
+    ? Math.max(countCeiling, inputMin)
+    : Math.max(
         metrics.maximumCount ?? 0,
         metrics.minimumCount * 3,
         metrics.totalCount,
         totalCountValue,
-      ),
-    [metrics.maximumCount, metrics.minimumCount, metrics.totalCount, totalCountValue],
-  )
-  const isCountMode = config.mode === 'count'
+      )
   const parsedDraftCount = Number(draftCountValue)
   const hasDraftCount = draftCountValue.trim().length > 0
   const isBelowMinimum =
-    isCountMode &&
+    usesCountInput &&
     hasDraftCount &&
     Number.isFinite(parsedDraftCount) &&
-    parsedDraftCount < metrics.minimumCount
+    parsedDraftCount < inputMin
   const addedPoints = Math.max(metrics.totalCount - metrics.anchorCount, 0)
+  const removableTurnPoints = Math.max(metrics.anchorCount - protectedCount, 0)
 
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
-      setDraftCountValue(isCountMode ? `${totalCountValue}` : '')
+      setDraftCountValue(usesCountInput ? `${totalCountValue}` : '')
     })
 
     return () => {
       window.cancelAnimationFrame(frameId)
     }
-  }, [isCountMode, totalCountValue])
+  }, [totalCountValue, usesCountInput])
 
   useEffect(() => {
     if (!isBelowMinimum) {
@@ -83,14 +91,14 @@ export function WaypointDensityPanel({
     }
 
     const timeoutId = window.setTimeout(() => {
-      onCountChange(metrics.minimumCount)
-      setDraftCountValue(`${metrics.minimumCount}`)
+      onCountChange(inputMin)
+      setDraftCountValue(`${inputMin}`)
     }, 1500)
 
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [isBelowMinimum, metrics.minimumCount, onCountChange])
+  }, [inputMin, isBelowMinimum, onCountChange])
 
   return (
     <section className="density-panel">
@@ -110,7 +118,7 @@ export function WaypointDensityPanel({
       {isExpanded && (
         <div className="density-panel-body">
           <div className="density-mode-group" role="radiogroup" aria-label="Waypoint density mode">
-            {(['auto', 'count', 'spacing'] as const).map((mode) => (
+            {(['auto', 'count', 'spacing', 'simplify'] as const).map((mode) => (
               <label
                 key={mode}
                 className={`density-mode-pill ${config.mode === mode ? 'is-active' : ''}`}
@@ -126,7 +134,9 @@ export function WaypointDensityPanel({
                     ? 'Auto'
                     : mode === 'count'
                       ? 'Add points'
-                      : 'By spacing'}
+                      : mode === 'spacing'
+                        ? 'By spacing'
+                        : 'Simplify'}
                 </span>
               </label>
             ))}
@@ -138,11 +148,11 @@ export function WaypointDensityPanel({
               <div className="density-input-row">
                 <input
                   type="number"
-                  min={metrics.minimumCount}
+                  min={inputMin}
                   max={inputMax}
-                  value={isCountMode ? draftCountValue : ''}
-                  readOnly={!isCountMode}
-                  disabled={!isCountMode}
+                  value={usesCountInput ? draftCountValue : ''}
+                  readOnly={!usesCountInput}
+                  disabled={!usesCountInput}
                   className={isBelowMinimum ? 'is-invalid' : undefined}
                   onChange={(event) => {
                     const nextValue = event.target.value
@@ -150,7 +160,7 @@ export function WaypointDensityPanel({
 
                     const numericValue = Number(nextValue)
 
-                    if (!Number.isFinite(numericValue) || numericValue < metrics.minimumCount) {
+                    if (!Number.isFinite(numericValue) || numericValue < inputMin) {
                       return
                     }
 
@@ -159,14 +169,14 @@ export function WaypointDensityPanel({
                 />
                 <small>waypoints</small>
               </div>
-              {isCountMode && (
+              {usesCountInput && (
                 <input
                   className="density-slider"
                   type="range"
-                  min={metrics.minimumCount}
+                  min={inputMin}
                   max={inputMax}
                   step={1}
-                  value={Number.isFinite(totalCountValue) ? totalCountValue : metrics.minimumCount}
+                  value={Number.isFinite(totalCountValue) ? totalCountValue : inputMin}
                   onChange={(event) => {
                     const nextValue = Number(event.target.value)
                     setDraftCountValue(`${nextValue}`)
@@ -194,14 +204,29 @@ export function WaypointDensityPanel({
           </div>
 
           <div className="density-breakdown">
-            <div className="density-breakdown-row">
-              <span>{metrics.anchorCount} turn points (fixed)</span>
-              <strong>{metrics.anchorCount}</strong>
-            </div>
-            <div className="density-breakdown-row">
-              <span>{addedPoints} added points</span>
-              <strong>{addedPoints}</strong>
-            </div>
+            {isSimplifyMode ? (
+              <>
+                <div className="density-breakdown-row">
+                  <span>{protectedCount} locked points</span>
+                  <strong>{protectedCount}</strong>
+                </div>
+                <div className="density-breakdown-row">
+                  <span>{removableTurnPoints} removable turn points</span>
+                  <strong>{removableTurnPoints}</strong>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="density-breakdown-row">
+                  <span>{metrics.anchorCount} turn points (fixed)</span>
+                  <strong>{metrics.anchorCount}</strong>
+                </div>
+                <div className="density-breakdown-row">
+                  <span>{addedPoints} added points</span>
+                  <strong>{addedPoints}</strong>
+                </div>
+              </>
+            )}
             <div className="density-breakdown-divider" />
             <div className="density-breakdown-row is-total">
               <span>Total waypoints</span>
@@ -211,12 +236,16 @@ export function WaypointDensityPanel({
 
           <div className="density-metrics">
             <span>Turn points: {metrics.anchorCount}</span>
-            <span>Added: {metrics.intermediateCount}</span>
+            {isSimplifyMode ? (
+              <span>Locked: {protectedCount}</span>
+            ) : (
+              <span>Added: {metrics.intermediateCount}</span>
+            )}
           </div>
 
           <div className="density-limits">
-            Min: {metrics.minimumCount} turn points
-            {metrics.maximumCount !== null ? ` · Max: ${metrics.maximumCount}` : ''}
+            Min: {inputMin} {isSimplifyMode ? 'locked / required' : 'turn points'}
+            {inputMax !== null ? ` · Max: ${inputMax}` : ''}
           </div>
 
           {isCountMode && metrics.totalCount === metrics.minimumCount && (
@@ -225,9 +254,21 @@ export function WaypointDensityPanel({
             </div>
           )}
 
+          {isSimplifyMode && (
+            <div className="density-note">
+              Simplify removes the least important turn points first while keeping locked mission points.
+            </div>
+          )}
+
+          {isSimplifyMode && metrics.totalCount === inputMin && (
+            <div className="density-note">
+              At the simplify floor. Further reduction would remove locked mission points.
+            </div>
+          )}
+
           {isBelowMinimum && (
             <div className="density-note is-warning">
-              Min is {metrics.minimumCount} turn points. Smaller values will clamp after a moment.
+              Min is {inputMin}. Smaller values will clamp after a moment so locked mission points stay preserved.
             </div>
           )}
 

@@ -421,7 +421,7 @@ function createDensityAwareMissionResult({
   }
 }
 
-function getWaypointDensityConstraints(
+export function getWaypointDensityConstraints(
   patternId: FlightPatternId,
   closed: boolean,
 ): WaypointDensityConstraints {

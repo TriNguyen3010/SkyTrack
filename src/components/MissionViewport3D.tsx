@@ -92,6 +92,8 @@ interface MissionViewport3DProps {
   drawingPoints: MissionPoint[]
   patternSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
+  pendingDensityPreviewWaypoints?: MissionWaypoint[] | null
+  pendingDensityPreviewAnchorWaypoints?: MissionWaypoint[] | null
   batteryReport?: MissionBatteryReport | null
   selectedWaypointId: number | null
   isClosedLoopMission?: boolean
@@ -127,6 +129,8 @@ export function MissionViewport3D({
   drawingPoints,
   patternSegments,
   waypoints,
+  pendingDensityPreviewWaypoints = null,
+  pendingDensityPreviewAnchorWaypoints = null,
   batteryReport = null,
   selectedWaypointId,
   isClosedLoopMission,
@@ -235,6 +239,8 @@ export function MissionViewport3D({
           drawingPoints={drawingPoints}
           patternSegments={patternSegments}
           waypoints={waypoints}
+          pendingDensityPreviewWaypoints={pendingDensityPreviewWaypoints}
+          pendingDensityPreviewAnchorWaypoints={pendingDensityPreviewAnchorWaypoints}
           batteryReport={batteryReport}
           selectedWaypointId={selectedWaypointId}
           isClosedLoopMission={isClosedLoopMission}
@@ -338,6 +344,8 @@ function MissionWorld({
   drawingPoints,
   patternSegments,
   waypoints,
+  pendingDensityPreviewWaypoints = null,
+  pendingDensityPreviewAnchorWaypoints = null,
   batteryReport = null,
   selectedWaypointId,
   isClosedLoopMission,
@@ -723,6 +731,33 @@ function MissionWorld({
   const revealedWaypoints = useMemo(
     () => getRevealedWaypoints(waypoints, routeRevealAnimation),
     [routeRevealAnimation, waypoints],
+  )
+  const currentAnchorWaypoints = useMemo(
+    () => waypoints.filter((waypoint) => waypoint.role === 'anchor'),
+    [waypoints],
+  )
+  const pendingDensityPreviewSegments = useMemo(
+    () =>
+      pendingDensityPreviewWaypoints
+        ? buildWaypointSegments(pendingDensityPreviewWaypoints)
+        : [],
+    [pendingDensityPreviewWaypoints],
+  )
+  const ghostRemovedAnchors = useMemo(
+    () => {
+      if (!pendingDensityPreviewAnchorWaypoints) {
+        return []
+      }
+
+      const nextAnchorKeys = new Set(
+        pendingDensityPreviewAnchorWaypoints.map((waypoint) => getWaypointSceneKey(waypoint)),
+      )
+
+      return currentAnchorWaypoints.filter(
+        (waypoint) => !nextAnchorKeys.has(getWaypointSceneKey(waypoint)),
+      )
+    },
+    [currentAnchorWaypoints, pendingDensityPreviewAnchorWaypoints],
   )
   const revealedRouteSegments = useMemo(
     () => buildWaypointSegments(revealedWaypoints),
@@ -1138,6 +1173,21 @@ function MissionWorld({
         ))}
 
       {stage === 'generated' &&
+        pendingDensityPreviewSegments.map(([start, end], index) => (
+          <Line
+            key={`density-preview-segment-${index}`}
+            points={[
+              toAltitudePlanePosition(start, scanAltitude, ALTITUDE_LINE_OFFSET + 0.22),
+              toAltitudePlanePosition(end, scanAltitude, ALTITUDE_LINE_OFFSET + 0.22),
+            ]}
+            color={selectedPatternColor}
+            transparent
+            opacity={0.94}
+            lineWidth={2.4}
+          />
+        ))}
+
+      {stage === 'generated' &&
         routeDirectionChevrons.map((chevron, index) => (
           <Line
             key={`route-chevron-${index}`}
@@ -1160,6 +1210,38 @@ function MissionWorld({
           mode="generated"
         />
       )}
+
+      {stage === 'generated' &&
+        ghostRemovedAnchors.map((waypoint) => (
+          <group
+            key={`density-ghost-${waypoint.id}`}
+            position={toAltitudeMarkerPosition(waypoint, waypoint.z)}
+          >
+            <mesh rotation-x={-Math.PI / 2} position={[0, 0.12, 0]}>
+              <ringGeometry args={[2.9, 3.65, 36]} />
+              <meshBasicMaterial color="#94a3b8" transparent opacity={0.4} />
+            </mesh>
+            <mesh rotation-x={-Math.PI / 2} position={[0, 0.18, 0]}>
+              <ringGeometry args={[1.85, 2.35, 36]} />
+              <meshBasicMaterial color="#cbd5e1" transparent opacity={0.52} />
+            </mesh>
+            <Billboard position={[0, 8.6, 0]} follow>
+              <mesh>
+                <circleGeometry args={[3.6, 36]} />
+                <meshBasicMaterial color="#94a3b8" transparent opacity={0.46} />
+              </mesh>
+              <Text
+                position={[0, 0, 0.05]}
+                fontSize={2.8}
+                color="#ffffff"
+                anchorX="center"
+                anchorY="middle"
+              >
+                {waypoint.id}
+              </Text>
+            </Billboard>
+          </group>
+        ))}
 
       {(stage === 'drawing' || stage === 'editing') &&
         drawingPoints.map((point, index) => (
@@ -2275,6 +2357,10 @@ function CoveragePatternPolish({
     )
   })
 
+  if (segments.length === 0) {
+    return null
+  }
+
   return (
     <>
       <group ref={ribbonRef} rotation-y={-directionAngle}>
@@ -2745,6 +2831,14 @@ function buildWaypointSegments(
   ])
 }
 
+function getWaypointSceneKey(
+  waypoint: Pick<MissionWaypoint, 'x' | 'y' | 'z'>,
+): string {
+  return `${Math.round(waypoint.x * 100) / 100}:${
+    Math.round(waypoint.y * 100) / 100
+  }:${Math.round(waypoint.z * 100) / 100}`
+}
+
 function buildColoredRouteSegments({
   waypoints,
   waypointEstimateMap,
@@ -2858,6 +2952,17 @@ function getCoverageSegmentGroups(
     center: Vec2
   }
 } {
+  if (segments.length === 0) {
+    const bounds = getVisualBounds(points, segments)
+
+    return {
+      sweepSegments: [],
+      connectorSegments: [],
+      directionAngle: 0,
+      bounds,
+    }
+  }
+
   const bounds = getVisualBounds(points, segments)
   const majorDimension = Math.max(bounds.width, bounds.height)
   const threshold = majorDimension * 0.28

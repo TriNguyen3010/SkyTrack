@@ -49,6 +49,58 @@ function isSimplifyMode(
   return config.mode === 'count' && config.targetCount !== null && config.targetCount < anchorCount
 }
 
+export function getProtectedWaypointCount({
+  anchors,
+  constraints,
+  protectActioned = true,
+}: {
+  anchors: MissionWaypoint[]
+  constraints: WaypointDensityConstraints
+  protectActioned?: boolean
+}): number {
+  if (anchors.length === 0) {
+    return 0
+  }
+
+  const protectedIds = new Set<number>()
+
+  if (constraints.isClosedLoop) {
+    protectedIds.add(anchors[0].id)
+  } else {
+    protectedIds.add(anchors[0].id)
+    protectedIds.add(anchors[anchors.length - 1].id)
+  }
+
+  if (protectActioned) {
+    anchors.forEach((anchor) => {
+      if (anchor.actions.length > 0) {
+        protectedIds.add(anchor.id)
+      }
+    })
+  }
+
+  return protectedIds.size
+}
+
+export function getWaypointCountFloor({
+  anchors,
+  constraints,
+  protectActioned = true,
+}: {
+  anchors: MissionWaypoint[]
+  constraints: WaypointDensityConstraints
+  protectActioned?: boolean
+}): number {
+  return Math.max(
+    constraints.minimumWaypointCount ?? 2,
+    getProtectedWaypointCount({
+      anchors,
+      constraints,
+      protectActioned,
+    }),
+  )
+}
+
 export function buildPathSegmentsFromAnchors(
   anchors: MissionWaypoint[],
 ): PathSegment[] {
@@ -228,7 +280,7 @@ function resolveDensityAdjustedAnchors({
   )
   const targetCount =
     config.targetCount ??
-    minimumWaypointCount
+    normalizedAnchors.length
 
   if (constraints.isClosedLoop && normalizedAnchors.length >= 2) {
     const targetUniqueCount = Math.max(targetCount - 1, 2)
