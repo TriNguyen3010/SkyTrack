@@ -21,6 +21,13 @@ export interface WaypointInteractionModel {
   didFallbackToAutoStart: boolean
 }
 
+function resolveClosedLoopState(
+  patternId: FlightPatternId,
+  isClosedLoopOverride?: boolean,
+): boolean {
+  return isClosedLoopOverride ?? getStartWaypointPolicy(patternId) === 'closed-rotatable'
+}
+
 export function getStartWaypointPolicy(
   patternId: FlightPatternId,
 ): StartWaypointPolicy {
@@ -40,13 +47,20 @@ export function deriveWaypointInteractionModel({
   patternId,
   waypoints,
   requestedStartWaypointId,
+  isClosedLoopOverride,
 }: {
   patternId: FlightPatternId
   waypoints: MissionWaypoint[]
   requestedStartWaypointId: number | null
+  isClosedLoopOverride?: boolean
 }): WaypointInteractionModel {
   const policy = getStartWaypointPolicy(patternId)
-  const allowedStartWaypointIds = getAllowedStartWaypointIds(patternId, waypoints)
+  const isClosedLoop = resolveClosedLoopState(patternId, isClosedLoopOverride)
+  const allowedStartWaypointIds = getAllowedStartWaypointIds(
+    patternId,
+    waypoints,
+    isClosedLoopOverride,
+  )
   const canUseRequestedStart =
     requestedStartWaypointId !== null &&
     allowedStartWaypointIds.includes(requestedStartWaypointId)
@@ -57,9 +71,13 @@ export function deriveWaypointInteractionModel({
     patternId,
     waypoints,
     effectiveStartWaypointId,
+    isClosedLoopOverride,
   )
-  const isClosedLoop = policy === 'closed-rotatable'
-  const endWaypointId = getMissionEndWaypointId(patternId, orderedWaypoints)
+  const endWaypointId = getMissionEndWaypointId(
+    patternId,
+    orderedWaypoints,
+    isClosedLoopOverride,
+  )
 
   return {
     policy,
@@ -77,6 +95,7 @@ export function deriveWaypointInteractionModel({
 export function getAllowedStartWaypointIds(
   patternId: FlightPatternId,
   waypoints: MissionWaypoint[],
+  isClosedLoopOverride?: boolean,
 ): number[] {
   if (waypoints.length === 0) {
     return []
@@ -86,7 +105,7 @@ export function getAllowedStartWaypointIds(
     return [waypoints[0].id]
   }
 
-  if (getStartWaypointPolicy(patternId) === 'closed-rotatable') {
+  if (resolveClosedLoopState(patternId, isClosedLoopOverride)) {
     return waypoints.map((waypoint) => waypoint.id)
   }
 
@@ -97,14 +116,18 @@ export function canSetStartWaypoint(
   patternId: FlightPatternId,
   waypointId: number,
   waypoints: MissionWaypoint[],
+  isClosedLoopOverride?: boolean,
 ): boolean {
-  return getAllowedStartWaypointIds(patternId, waypoints).includes(waypointId)
+  return getAllowedStartWaypointIds(patternId, waypoints, isClosedLoopOverride).includes(
+    waypointId,
+  )
 }
 
 export function getOrderedMissionWaypoints(
   patternId: FlightPatternId,
   waypoints: MissionWaypoint[],
   startWaypointId: number | null,
+  isClosedLoopOverride?: boolean,
 ): MissionWaypoint[] {
   if (waypoints.length <= 1 || startWaypointId === null) {
     return [...waypoints]
@@ -118,7 +141,7 @@ export function getOrderedMissionWaypoints(
     return [...waypoints]
   }
 
-  if (getStartWaypointPolicy(patternId) === 'closed-rotatable') {
+  if (resolveClosedLoopState(patternId, isClosedLoopOverride)) {
     return [...waypoints.slice(startIndex), ...waypoints.slice(0, startIndex)]
   }
 
@@ -132,6 +155,7 @@ export function getOrderedMissionWaypoints(
 export function getMissionEndWaypointId(
   patternId: FlightPatternId,
   orderedWaypoints: MissionWaypoint[],
+  isClosedLoopOverride?: boolean,
 ): number | null {
   if (orderedWaypoints.length === 0) {
     return null
@@ -141,7 +165,7 @@ export function getMissionEndWaypointId(
     return orderedWaypoints[0].id
   }
 
-  if (getStartWaypointPolicy(patternId) === 'closed-rotatable') {
+  if (resolveClosedLoopState(patternId, isClosedLoopOverride)) {
     return orderedWaypoints[0].id
   }
 

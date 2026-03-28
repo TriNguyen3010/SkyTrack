@@ -94,6 +94,7 @@ interface MissionViewport3DProps {
   waypoints: MissionWaypoint[]
   batteryReport?: MissionBatteryReport | null
   selectedWaypointId: number | null
+  isClosedLoopMission?: boolean
   hoveredWaypointId?: number | null
   selectedPattern: FlightPatternId
   hoveredPattern: FlightPatternId | null
@@ -128,6 +129,7 @@ export function MissionViewport3D({
   waypoints,
   batteryReport = null,
   selectedWaypointId,
+  isClosedLoopMission,
   hoveredWaypointId = null,
   selectedPattern,
   hoveredPattern,
@@ -235,6 +237,7 @@ export function MissionViewport3D({
           waypoints={waypoints}
           batteryReport={batteryReport}
           selectedWaypointId={selectedWaypointId}
+          isClosedLoopMission={isClosedLoopMission}
           hoveredWaypointId={hoveredWaypointId}
           selectedPattern={selectedPattern}
           hoveredPattern={hoveredPattern}
@@ -337,6 +340,7 @@ function MissionWorld({
   waypoints,
   batteryReport = null,
   selectedWaypointId,
+  isClosedLoopMission,
   hoveredWaypointId = null,
   selectedPattern,
   hoveredPattern,
@@ -741,7 +745,7 @@ function MissionWorld({
       ? null
       : waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null
   const isClosedLoopPattern =
-    getStartWaypointPolicy(selectedPattern) === 'closed-rotatable'
+    isClosedLoopMission ?? (getStartWaypointPolicy(selectedPattern) === 'closed-rotatable')
   const startWaypointId = waypoints[0]?.id ?? null
   const endWaypointId =
     !isClosedLoopPattern && waypoints.length > 1

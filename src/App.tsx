@@ -141,6 +141,10 @@ function App() {
   const exclusionZones = useMissionStore((state) => state.exclusionZones)
   const activeExclusionZoneId = useMissionStore((state) => state.activeExclusionZoneId)
   const drawingTarget = useMissionStore((state) => state.drawingTarget)
+  const generatedPatternId = useMissionStore((state) => state.generatedPatternId)
+  const generatedPatternMeta = useMissionStore((state) => state.generatedPatternMeta)
+  const generatedSegments = useMissionStore((state) => state.generatedSegments)
+  const generatedClosed = useMissionStore((state) => state.generatedClosed)
   const waypoints = useMissionStore((state) => state.waypoints)
   const selectedWaypointId = useMissionStore((state) => state.selectedWaypointId)
   const startWaypointId = useMissionStore((state) => state.startWaypointId)
@@ -227,6 +231,13 @@ function App() {
     () => getFlightPatternDefinition(selectedPattern),
     [selectedPattern],
   )
+  const generatedPatternOption = useMemo(
+    () =>
+      generatedPatternId
+        ? getFlightPatternDefinition(generatedPatternId)
+        : selectedPatternOption,
+    [generatedPatternId, selectedPatternOption],
+  )
   const resolvedDroneProfile = useMemo(
     () => resolveDroneProfile(droneProfileId, droneProfileOverrides),
     [droneProfileId, droneProfileOverrides],
@@ -299,15 +310,18 @@ function App() {
         : null,
     [isPolygonValid, patternGenerationContext, selectedPattern],
   )
-  const patternSegments = useMemo(
-    () => activePreviewMission?.segments ?? [],
-    [activePreviewMission],
+  const displayPatternId =
+    stage === 'generated' ? generatedPatternId ?? selectedPattern : selectedPattern
+  const displayPatternMeta =
+    stage === 'generated' ? generatedPatternMeta : selectedPatternMission?.meta ?? null
+  const displayPatternSegments = useMemo(
+    () => (stage === 'generated' ? generatedSegments : activePreviewMission?.segments ?? []),
+    [activePreviewMission, generatedSegments, stage],
   )
   const generatedWaypoints = useMemo(
     () => selectedPatternMission?.waypoints ?? [],
     [selectedPatternMission],
   )
-  const selectedPatternMeta = selectedPatternMission?.meta ?? null
   const previewBatteryReport = useMemo(
     () =>
       selectedPatternMission
@@ -324,11 +338,12 @@ function App() {
   const waypointInteractionModel = useMemo(
     () =>
       deriveWaypointInteractionModel({
-        patternId: selectedPattern,
+        patternId: displayPatternId,
         waypoints,
         requestedStartWaypointId: startWaypointId,
+        isClosedLoopOverride: stage === 'generated' ? generatedClosed : undefined,
       }),
-    [selectedPattern, startWaypointId, waypoints],
+    [displayPatternId, generatedClosed, stage, startWaypointId, waypoints],
   )
   const orderedWaypoints = waypointInteractionModel.orderedWaypoints
   const effectiveStartWaypointId = waypointInteractionModel.effectiveStartWaypointId
@@ -461,9 +476,14 @@ function App() {
   const canRadialWaypointBeStart = useMemo(
     () =>
       radialMenuWaypoint
-        ? canSetStartWaypoint(selectedPattern, radialMenuWaypoint.id, waypoints)
+        ? canSetStartWaypoint(
+            displayPatternId,
+            radialMenuWaypoint.id,
+            waypoints,
+            stage === 'generated' ? generatedClosed : undefined,
+          )
         : false,
-    [radialMenuWaypoint, selectedPattern, waypoints],
+    [displayPatternId, generatedClosed, radialMenuWaypoint, stage, waypoints],
   )
   const isRadialWaypointStart =
     radialMenuWaypoint !== null && radialMenuWaypoint.id === displayStartWaypointId
@@ -778,48 +798,6 @@ function App() {
   }, [viewportAnimationState])
 
   useEffect(() => {
-    if (stage !== 'generated' || !selectedPatternMission) {
-      return undefined
-    }
-
-    if (selectedPatternMission.waypoints.length === 0) {
-      const frameId = window.requestAnimationFrame(() => {
-        editGeneratedPath()
-        setInteractionNotice({
-          tone: 'warning',
-          message:
-            enabledExclusionZones.length > 0
-              ? 'Excluded areas remove the full scan path. Adjust or disable a zone and try again.'
-              : 'Mission path is no longer available for the current region.',
-        })
-      })
-
-      return () => {
-        window.cancelAnimationFrame(frameId)
-      }
-    }
-
-    if (areWaypointRoutesEquivalent(waypoints, selectedPatternMission.waypoints)) {
-      return undefined
-    }
-
-    const frameId = window.requestAnimationFrame(() => {
-      generateMissionPath(selectedPatternMission.waypoints)
-    })
-
-    return () => {
-      window.cancelAnimationFrame(frameId)
-    }
-  }, [
-    editGeneratedPath,
-    enabledExclusionZones.length,
-    generateMissionPath,
-    selectedPatternMission,
-    stage,
-    waypoints,
-  ])
-
-  useEffect(() => {
     if (scanAltitude !== activePatternParams.scanAltitude) {
       setScanAltitude(activePatternParams.scanAltitude)
     }
@@ -965,7 +943,7 @@ function App() {
       return
     }
 
-    if (!isPolygonValid || generatedWaypoints.length === 0) {
+    if (!selectedPatternMission || !isPolygonValid || generatedWaypoints.length === 0) {
       setInteractionNotice({
         tone: 'warning',
         message:
@@ -977,7 +955,7 @@ function App() {
     }
 
     clearInteractionNotice()
-    generateMissionPath(generatedWaypoints)
+    generateMissionPath(selectedPatternMission)
   }
 
   function handleResetMission() {
@@ -1001,7 +979,15 @@ function App() {
   function handleAddExclusionZone() {
     dismissPatternPicker()
     dismissWaypointRadialMenu()
-    clearInteractionNotice()
+    setInteractionNotice(
+      stage === 'generated'
+        ? {
+            tone: 'warning',
+            message:
+              'Mission changed. Draw the excluded area, then generate the path again to apply it.',
+          }
+        : null,
+    )
     addExclusionZone()
   }
 
@@ -1010,12 +996,26 @@ function App() {
       return
     }
 
-    clearInteractionNotice()
+    setInteractionNotice(
+      stage === 'generated'
+        ? {
+            tone: 'warning',
+            message: 'Mission changed. Review the updated region and generate path again.',
+          }
+        : null,
+    )
     removeExclusionZone(zone.id)
   }
 
   function handleToggleExclusionZone(zoneId: number) {
-    clearInteractionNotice()
+    setInteractionNotice(
+      stage === 'generated'
+        ? {
+            tone: 'warning',
+            message: 'Mission changed. Review the updated region and generate path again.',
+          }
+        : null,
+    )
     toggleExclusionZone(zoneId)
   }
 
@@ -1102,7 +1102,14 @@ function App() {
       return
     }
 
-    if (!canSetStartWaypoint(selectedPattern, waypointId, waypoints)) {
+    if (
+      !canSetStartWaypoint(
+        displayPatternId,
+        waypointId,
+        waypoints,
+        stage === 'generated' ? generatedClosed : undefined,
+      )
+    ) {
       setInteractionNotice({
         tone: 'warning',
         message: getBlockedStartWaypointMessage(isClosedMissionLoop),
@@ -1256,11 +1263,12 @@ function App() {
               activeExclusionZoneId={activeExclusionZoneId}
               drawingTarget={drawingTarget}
               drawingPoints={activeDrawingPoints}
-              patternSegments={patternSegments}
+              patternSegments={displayPatternSegments}
               waypoints={orderedWaypoints}
               batteryReport={generatedBatteryReport}
               selectedWaypointId={selectedWaypointId}
-              selectedPattern={selectedPattern}
+              isClosedLoopMission={isClosedMissionLoop}
+              selectedPattern={displayPatternId}
               hoveredPattern={hoveredPattern}
               patternPickerVisible={patternPickerVisible}
               waypointContextMenuVisible={waypointRadialMenu !== null}
@@ -2046,7 +2054,7 @@ function App() {
                   <div className="generated-summary-top">
                     <div className="setup-mode">
                       <ScanLine size={16} strokeWidth={2.2} />
-                      <span>{selectedPatternOption.shortLabel}</span>
+                      <span>{generatedPatternOption.shortLabel}</span>
                     </div>
                     <button
                       type="button"
@@ -2058,7 +2066,7 @@ function App() {
                   </div>
                   <p className="generated-summary-meta">
                     {formatPatternGeneratedMeta({
-                      patternId: selectedPattern,
+                      patternId: displayPatternId,
                       scanAltitude,
                       lineSpacing,
                       orientation,
@@ -2066,7 +2074,7 @@ function App() {
                       waypointsWithActions,
                       totalWaypointActions,
                       area,
-                      meta: selectedPatternMeta,
+                      meta: displayPatternMeta,
                     })}
                   </p>
                   {orderedWaypoints.length > 0 && (
@@ -2177,7 +2185,7 @@ function App() {
                     <Route size={16} strokeWidth={2.2} />
                   </div>
                   <div className="behavior-overview-copy">
-                    <strong>{selectedPatternOption.shortLabel}</strong>
+                    <strong>{generatedPatternOption.shortLabel}</strong>
                     <span>
                       {orderedWaypoints.length} waypoints · {waypointsWithActions} action nodes ·{' '}
                       {totalWaypointActions} actions
@@ -3634,26 +3642,6 @@ function renderWaypointActionIcon(type: MissionWaypointActionType) {
     case 'trigger_sensor':
       return <Radar size={15} strokeWidth={2.1} />
   }
-}
-
-function areWaypointRoutesEquivalent(
-  current: MissionWaypoint[],
-  next: MissionWaypoint[],
-): boolean {
-  if (current.length !== next.length) {
-    return false
-  }
-
-  return current.every((waypoint, index) => {
-    const candidate = next[index]
-
-    return (
-      candidate !== undefined &&
-      Math.abs(waypoint.x - candidate.x) < 0.001 &&
-      Math.abs(waypoint.y - candidate.y) < 0.001 &&
-      Math.abs(waypoint.z - candidate.z) < 0.001
-    )
-  })
 }
 
 export default App
