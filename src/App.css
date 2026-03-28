@@ -1299,11 +1299,62 @@
   min-width: 0;
 }
 
+.density-input-row input.is-invalid {
+  border-color: rgba(239, 68, 68, 0.44);
+  background: rgba(254, 242, 242, 0.96);
+  color: #b91c1c;
+}
+
 .density-input-row small {
   color: #94a3b8;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.density-slider {
+  width: 100%;
+  margin-top: 8px;
+  accent-color: var(--brand-primary);
+}
+
+.density-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 12px;
+}
+
+.density-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.density-breakdown-row span {
+  color: #526071;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.density-breakdown-row strong {
+  color: #334155;
+  font-size: 14px;
+}
+
+.density-breakdown-row.is-total strong {
+  color: var(--brand-primary);
+  font-size: 16px;
+}
+
+.density-breakdown-divider {
+  height: 1px;
+  background: rgba(226, 232, 240, 0.9);
 }
 
 .density-metrics {
@@ -1313,6 +1364,21 @@
   color: #526071;
   font-size: 12px;
   font-weight: 700;
+}
+
+.density-note {
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.94);
+  padding: 10px 12px;
+  color: #526071;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.density-note.is-warning {
+  background: rgba(255, 251, 235, 0.96);
+  color: #b45309;
 }
 
 .density-pending {
