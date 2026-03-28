@@ -128,4 +128,25 @@ describe('flight pattern density integration', () => {
     expect(mission?.anchorWaypoints.length).toBeGreaterThanOrEqual(24)
     expect(mission?.waypoints).toHaveLength(mission?.anchorWaypoints.length ?? 0)
   })
+
+  it('can reduce coverage route down to a smaller total waypoint count', () => {
+    const mission = buildFlightPatternMission('coverage', {
+      points: boundary,
+      exclusionZones: [],
+      paramsByPattern: createInitialPatternParams({
+        scanAltitude: 50,
+        lineSpacing: 20,
+        orientation: 0,
+      }),
+      waypointDensity: {
+        mode: 'count',
+        targetCount: 5,
+        targetSpacing: null,
+      },
+    })
+
+    expect(mission).not.toBeNull()
+    expect(mission?.waypoints).toHaveLength(5)
+    expect(mission?.waypoints.every((waypoint) => waypoint.role === 'anchor')).toBe(true)
+  })
 })

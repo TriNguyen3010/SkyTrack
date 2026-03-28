@@ -12,9 +12,10 @@ import {
   type WaypointDensityConfig,
 } from './waypointDensityModels'
 import {
+  buildDensityAdjustedPath,
   buildPathSegmentsFromAnchors,
-  resamplePath,
 } from './waypointDensity'
+import type { WaypointDensityConstraints } from './waypointDensityModels'
 import type {
   ExclusionZone,
   MissionPoint,
@@ -397,29 +398,70 @@ function createDensityAwareMissionResult({
       role: 'anchor',
     })),
   )
-  const pathSegments = buildPathSegmentsFromAnchors(normalizedAnchors)
   const effectiveDensityConfig = densityConfig ?? DEFAULT_WAYPOINT_DENSITY_CONFIG
-  const waypoints = resamplePath({
+  const densityConstraints = getWaypointDensityConstraints(patternId, closed)
+  const densityAdjustedPath = buildDensityAdjustedPath({
     anchors: normalizedAnchors,
-    pathSegments,
+    pathSegments: buildPathSegmentsFromAnchors(normalizedAnchors),
     config: effectiveDensityConfig,
-    constraints: {
-      minSpacing: 2,
-      maxWaypoints: null,
-    },
+    constraints: densityConstraints,
   })
 
   return {
     patternId,
     segments,
-    anchorWaypoints: normalizedAnchors,
-    pathSegments,
-    waypoints,
+    anchorWaypoints: densityAdjustedPath.anchorWaypoints,
+    pathSegments: densityAdjustedPath.pathSegments,
+    waypoints: densityAdjustedPath.waypoints,
     closed,
     meta: {
       ...meta,
-      estimatedLength: estimateWaypointPathLength(waypoints),
+      estimatedLength: estimateWaypointPathLength(densityAdjustedPath.waypoints),
     },
+  }
+}
+
+function getWaypointDensityConstraints(
+  patternId: FlightPatternId,
+  closed: boolean,
+): WaypointDensityConstraints {
+  switch (patternId) {
+    case 'coverage':
+    case 'grid':
+      return {
+        minSpacing: 2,
+        maxWaypoints: null,
+        minimumWaypointCount: 4,
+        isClosedLoop: false,
+      }
+    case 'perimeter':
+      return {
+        minSpacing: 2,
+        maxWaypoints: null,
+        minimumWaypointCount: 4,
+        isClosedLoop: closed,
+      }
+    case 'orbit':
+      return {
+        minSpacing: 2,
+        maxWaypoints: null,
+        minimumWaypointCount: 6,
+        isClosedLoop: closed,
+      }
+    case 'spiral':
+      return {
+        minSpacing: 2,
+        maxWaypoints: null,
+        minimumWaypointCount: 4,
+        isClosedLoop: false,
+      }
+    case 'corridor':
+      return {
+        minSpacing: 2,
+        maxWaypoints: null,
+        minimumWaypointCount: 2,
+        isClosedLoop: false,
+      }
   }
 }
 

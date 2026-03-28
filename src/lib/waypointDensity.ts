@@ -5,6 +5,16 @@ import type {
   WaypointDensityConstraints,
   WaypointDensityMetrics,
 } from './waypointDensityModels'
+import {
+  rdpSimplifyAnchors,
+  simplifyAnchorsToTargetCount,
+} from './waypointSimplify'
+
+export interface DensityAdjustedPathResult {
+  anchorWaypoints: MissionWaypoint[]
+  pathSegments: PathSegment[]
+  waypoints: MissionWaypoint[]
+}
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100
@@ -26,6 +36,17 @@ function isCountMode(config: WaypointDensityConfig): boolean {
 
 function isSpacingMode(config: WaypointDensityConfig): boolean {
   return config.mode === 'spacing' && config.targetSpacing !== null
+}
+
+function isSimplifyMode(
+  config: WaypointDensityConfig,
+  anchorCount: number,
+): boolean {
+  if (config.mode === 'simplify') {
+    return true
+  }
+
+  return config.mode === 'count' && config.targetCount !== null && config.targetCount < anchorCount
 }
 
 export function buildPathSegmentsFromAnchors(
@@ -134,6 +155,110 @@ function normalizeWaypointIds(waypoints: MissionWaypoint[]): MissionWaypoint[] {
   }))
 }
 
+function buildClosedLoopAnchors(
+  anchors: MissionWaypoint[],
+  targetUniqueCount: number,
+  config: WaypointDensityConfig,
+  constraints: WaypointDensityConstraints,
+): MissionWaypoint[] {
+  const uniqueAnchors = anchors.slice(0, -1)
+
+  if (uniqueAnchors.length <= 2) {
+    return normalizeWaypointIds([
+      ...uniqueAnchors.map((anchor) => ({
+        ...anchor,
+        role: 'anchor' as const,
+      })),
+      ...uniqueAnchors.slice(0, 1).map((anchor) => ({
+        ...anchor,
+        role: 'anchor' as const,
+      })),
+    ])
+  }
+
+  const simplifyOptions = {
+    closed: true,
+    minimumWaypointCount: Math.max((constraints.minimumWaypointCount ?? 2) - 1, 2),
+    protectActioned: config.protectActioned !== false,
+  }
+  const simplifiedUniqueAnchors =
+    config.simplifyTolerance !== null && config.simplifyTolerance !== undefined
+      ? rdpSimplifyAnchors(uniqueAnchors, config.simplifyTolerance, simplifyOptions)
+      : simplifyAnchorsToTargetCount(uniqueAnchors, targetUniqueCount, simplifyOptions)
+  const closedLoopAnchors = [
+    ...simplifiedUniqueAnchors,
+    simplifiedUniqueAnchors[0],
+  ].filter(Boolean) as MissionWaypoint[]
+
+  return normalizeWaypointIds(
+    closedLoopAnchors.map((anchor) => ({
+      ...anchor,
+      role: 'anchor',
+    })),
+  )
+}
+
+function resolveDensityAdjustedAnchors({
+  anchors,
+  config,
+  constraints,
+}: {
+  anchors: MissionWaypoint[]
+  config: WaypointDensityConfig
+  constraints: WaypointDensityConstraints
+}): MissionWaypoint[] {
+  const normalizedAnchors = normalizeWaypointIds(
+    anchors.map((anchor) => ({
+      ...anchor,
+      role: 'anchor',
+    })),
+  )
+
+  if (
+    normalizedAnchors.length <= 2 ||
+    config.mode === 'auto' ||
+    !isSimplifyMode(config, normalizedAnchors.length)
+  ) {
+    return normalizedAnchors
+  }
+
+  const minimumWaypointCount = Math.max(
+    constraints.minimumWaypointCount ?? 2,
+    constraints.isClosedLoop ? 3 : 2,
+  )
+  const targetCount =
+    config.targetCount ??
+    minimumWaypointCount
+
+  if (constraints.isClosedLoop && normalizedAnchors.length >= 2) {
+    const targetUniqueCount = Math.max(targetCount - 1, 2)
+
+    return buildClosedLoopAnchors(
+      normalizedAnchors,
+      targetUniqueCount,
+      config,
+      constraints,
+    )
+  }
+
+  const simplifyOptions = {
+    closed: false,
+    minimumWaypointCount,
+    protectActioned: config.protectActioned !== false,
+  }
+  const simplifiedAnchors =
+    config.simplifyTolerance !== null && config.simplifyTolerance !== undefined
+      ? rdpSimplifyAnchors(normalizedAnchors, config.simplifyTolerance, simplifyOptions)
+      : simplifyAnchorsToTargetCount(normalizedAnchors, targetCount, simplifyOptions)
+
+  return normalizeWaypointIds(
+    simplifiedAnchors.map((anchor) => ({
+      ...anchor,
+      role: 'anchor',
+    })),
+  )
+}
+
 function buildFinalWaypoints(
   anchors: MissionWaypoint[],
   segments: PathSegment[],
@@ -193,28 +318,66 @@ export function resamplePath({
   config: WaypointDensityConfig
   constraints: WaypointDensityConstraints
 }): MissionWaypoint[] {
-  if (anchors.length <= 1 || pathSegments.length === 0 || config.mode === 'auto') {
-    return normalizeWaypointIds(
-      anchors.map((anchor) => ({
-        ...anchor,
-        role: 'anchor',
-      })),
-    )
+  return buildDensityAdjustedPath({
+    anchors,
+    pathSegments,
+    config,
+    constraints,
+  }).waypoints
+}
+
+export function buildDensityAdjustedPath({
+  anchors,
+  pathSegments,
+  config,
+  constraints,
+}: {
+  anchors: MissionWaypoint[]
+  pathSegments: PathSegment[]
+  config: WaypointDensityConfig
+  constraints: WaypointDensityConstraints
+}): DensityAdjustedPathResult {
+  const effectiveAnchors = resolveDensityAdjustedAnchors({
+    anchors,
+    config,
+    constraints,
+  })
+  const effectivePathSegments =
+    pathSegments.length > 0 && effectiveAnchors.length === anchors.length
+      ? pathSegments
+      : buildPathSegmentsFromAnchors(effectiveAnchors)
+
+  if (
+    effectiveAnchors.length <= 1 ||
+    effectivePathSegments.length === 0 ||
+    config.mode === 'auto' ||
+    isSimplifyMode(config, anchors.length)
+  ) {
+    return {
+      anchorWaypoints: effectiveAnchors,
+      pathSegments: effectivePathSegments,
+      waypoints: normalizeWaypointIds(
+        effectiveAnchors.map((anchor) => ({
+          ...anchor,
+          role: 'anchor',
+        })),
+      ),
+    }
   }
 
-  let intermediateCounts = pathSegments.map(() => 0)
+  let intermediateCounts = effectivePathSegments.map(() => 0)
 
   if (isCountMode(config)) {
-    const targetCount = config.targetCount ?? anchors.length
+    const targetCount = config.targetCount ?? effectiveAnchors.length
     const totalCount = clampTargetCount(
       targetCount,
-      anchors.length,
+      effectiveAnchors.length,
       constraints.maxWaypoints,
     )
-    const totalIntermediateCount = Math.max(totalCount - anchors.length, 0)
+    const totalIntermediateCount = Math.max(totalCount - effectiveAnchors.length, 0)
 
     intermediateCounts = allocateIntermediateCountsByTarget(
-      pathSegments,
+      effectivePathSegments,
       totalIntermediateCount,
     )
   } else if (isSpacingMode(config)) {
@@ -223,28 +386,36 @@ export function resamplePath({
       constraints.minSpacing,
     )
 
-    intermediateCounts = getIntermediateCountsForSpacing(pathSegments, targetSpacing)
+    intermediateCounts = getIntermediateCountsForSpacing(effectivePathSegments, targetSpacing)
 
     if (constraints.maxWaypoints !== null) {
       const currentCount =
-        anchors.length +
+        effectiveAnchors.length +
         intermediateCounts.reduce((sum, count) => sum + count, 0)
 
       if (currentCount > constraints.maxWaypoints) {
         const cappedIntermediateCount = Math.max(
-          constraints.maxWaypoints - anchors.length,
+          constraints.maxWaypoints - effectiveAnchors.length,
           0,
         )
 
         intermediateCounts = allocateIntermediateCountsByTarget(
-          pathSegments,
+          effectivePathSegments,
           cappedIntermediateCount,
         )
       }
     }
   }
 
-  return buildFinalWaypoints(anchors, pathSegments, intermediateCounts)
+  return {
+    anchorWaypoints: effectiveAnchors,
+    pathSegments: effectivePathSegments,
+    waypoints: buildFinalWaypoints(
+      effectiveAnchors,
+      effectivePathSegments,
+      intermediateCounts,
+    ),
+  }
 }
 
 export function computeWaypointDensityMetrics({

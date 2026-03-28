@@ -23,6 +23,8 @@ function getModeLabel(mode: WaypointDensityConfig['mode']): string {
       return 'add points'
     case 'spacing':
       return 'by spacing'
+    case 'simplify':
+      return 'simplify'
   }
 }
 

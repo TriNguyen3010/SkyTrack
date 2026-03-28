@@ -94,7 +94,7 @@ describe('waypointDensity', () => {
     expect(waypoints.filter((waypoint) => waypoint.role === 'intermediate')).toHaveLength(5)
   })
 
-  it('clamps count mode below anchor minimum', () => {
+  it('falls back to the configured minimum count floor when simplifying', () => {
     const anchors = [anchor(1, 0, 0), anchor(2, 20, 0), anchor(3, 40, 0)]
     const pathSegments = buildPathSegmentsFromAnchors(anchors)
 
@@ -106,7 +106,38 @@ describe('waypointDensity', () => {
         targetCount: 2,
         targetSpacing: null,
       },
-      constraints: DEFAULT_WAYPOINT_DENSITY_CONSTRAINTS,
+      constraints: {
+        ...DEFAULT_WAYPOINT_DENSITY_CONSTRAINTS,
+        minimumWaypointCount: 2,
+      },
+    })
+
+    expect(waypoints).toHaveLength(2)
+    expect(waypoints.every((waypoint) => waypoint.role === 'anchor')).toBe(true)
+  })
+
+  it('switches count mode into simplify behavior below anchor count', () => {
+    const anchors = [
+      anchor(1, 0, 0),
+      anchor(2, 10, 0),
+      anchor(3, 20, 0),
+      anchor(4, 30, 0),
+      anchor(5, 40, 0),
+    ]
+    const pathSegments = buildPathSegmentsFromAnchors(anchors)
+
+    const waypoints = resamplePath({
+      anchors,
+      pathSegments,
+      config: {
+        mode: 'count',
+        targetCount: 3,
+        targetSpacing: null,
+      },
+      constraints: {
+        ...DEFAULT_WAYPOINT_DENSITY_CONSTRAINTS,
+        minimumWaypointCount: 3,
+      },
     })
 
     expect(waypoints).toHaveLength(3)

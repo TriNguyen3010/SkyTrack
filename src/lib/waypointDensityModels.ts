@@ -3,9 +3,11 @@ import type { Vec2 } from './missionGeometry'
 export type WaypointRole = 'anchor' | 'intermediate'
 
 export interface WaypointDensityConfig {
-  mode: 'auto' | 'count' | 'spacing'
+  mode: 'auto' | 'count' | 'spacing' | 'simplify'
   targetCount: number | null
   targetSpacing: number | null
+  simplifyTolerance?: number | null
+  protectActioned?: boolean
 }
 
 export interface PathSegment {
@@ -18,6 +20,8 @@ export interface PathSegment {
 export interface WaypointDensityConstraints {
   minSpacing: number
   maxWaypoints: number | null
+  minimumWaypointCount?: number
+  isClosedLoop?: boolean
 }
 
 export interface WaypointDensityMetrics {
@@ -34,9 +38,13 @@ export const DEFAULT_WAYPOINT_DENSITY_CONFIG: WaypointDensityConfig = {
   mode: 'auto',
   targetCount: null,
   targetSpacing: null,
+  simplifyTolerance: null,
+  protectActioned: true,
 }
 
 export const DEFAULT_WAYPOINT_DENSITY_CONSTRAINTS: WaypointDensityConstraints = {
   minSpacing: 2,
   maxWaypoints: null,
+  minimumWaypointCount: 2,
+  isClosedLoop: false,
 }

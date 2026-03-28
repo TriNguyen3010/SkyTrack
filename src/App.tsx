@@ -1155,7 +1155,7 @@ function App() {
   }
 
   function handleWaypointDensityModeChange(
-    mode: 'auto' | 'count' | 'spacing',
+    mode: 'auto' | 'count' | 'spacing' | 'simplify',
   ) {
     setWaypointDensityMode(mode)
   }
