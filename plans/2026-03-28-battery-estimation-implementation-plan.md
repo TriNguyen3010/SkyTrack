@@ -28,6 +28,10 @@ Quy ước làm việc:
 - Nếu spec gốc và code hiện tại lệch nhau, cập nhật file này trước rồi mới implement.
 - Các hạng mục như `weather-aware`, `telemetry sync`, `multi-battery mission`, `regulatory preset nâng cao` sẽ được tách sang deferred backlog, không chặn v1.
 
+Trạng thái hiện tại:
+
+- File này đã được chốt làm nguồn đối chiếu chính cho mọi lượt implement tiếp theo liên quan tới `Battery Estimation Spec`.
+
 ## 3. Trạng thái hiện tại của codebase
 
 ### 3.1. Đã có
@@ -378,4 +382,4 @@ Lý do:
 - [x] Stream C: Progressive disclosure UI
 - [x] Stream D: Safety overlay + viewport integration
 - [x] Stream E: Recommendations + advanced safety
-- [ ] Dùng file này làm nguồn đối chiếu khi implement Battery Estimation Spec
+- [x] Dùng file này làm nguồn đối chiếu khi implement Battery Estimation Spec
