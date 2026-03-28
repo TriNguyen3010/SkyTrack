@@ -5,6 +5,7 @@ import {
   type Vec2,
 } from './missionGeometry'
 import { clipSegmentsAgainstExclusions } from './exclusionGeometry'
+import { isPointInAnyExclusion } from './exclusionGeometry'
 import type {
   ExclusionZone,
   MissionPoint,
@@ -388,6 +389,7 @@ function generateCoverageMission({
 
 function generatePerimeterMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, insetDistance, loops, direction } =
@@ -395,10 +397,6 @@ function generatePerimeterMission({
   const insetBoundary =
     insetDistance > 0 ? insetPolygonRadially(points, insetDistance) : [...points]
   const orderedBoundary = getPerimeterRing(insetBoundary, direction)
-  const perimeterSegments = orderedBoundary.slice(1).map((point, index) => [
-    orderedBoundary[index],
-    point,
-  ] as [Vec2, Vec2])
   const waypointRoute: MissionWaypoint[] = []
 
   for (let loopIndex = 0; loopIndex < loops; loopIndex += 1) {
@@ -415,13 +413,17 @@ function generatePerimeterMission({
     })
   }
 
+  const filteredWaypoints = normalizeWaypointIds(
+    filterWaypointsOutsideExclusions(waypointRoute, exclusionZones),
+  )
+
   return {
     patternId: 'perimeter',
-    segments: perimeterSegments,
-    waypoints: waypointRoute,
-    closed: true,
+    segments: buildSegmentsFromWaypointRoute(filteredWaypoints),
+    waypoints: filteredWaypoints,
+    closed: isWaypointRouteClosed(filteredWaypoints),
     meta: {
-      estimatedLength: estimateWaypointPathLength(waypointRoute),
+      estimatedLength: estimateWaypointPathLength(filteredWaypoints),
       loops,
       direction: direction.toUpperCase(),
     },
@@ -430,6 +432,7 @@ function generatePerimeterMission({
 
 function generateOrbitMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const {
@@ -469,10 +472,6 @@ function generateOrbitMission({
     waypointCount,
     direction,
   })
-  const segments = baseRing.slice(1).map((point, index) => [
-    baseRing[index],
-    point,
-  ] as [Vec2, Vec2])
   const orbitRoute: MissionWaypoint[] = []
 
   for (let loopIndex = 0; loopIndex < loops; loopIndex += 1) {
@@ -489,13 +488,17 @@ function generateOrbitMission({
     })
   }
 
+  const filteredWaypoints = normalizeWaypointIds(
+    filterWaypointsOutsideExclusions(orbitRoute, exclusionZones),
+  )
+
   return {
     patternId: 'orbit',
-    segments,
-    waypoints: orbitRoute,
-    closed: true,
+    segments: buildSegmentsFromWaypointRoute(filteredWaypoints),
+    waypoints: filteredWaypoints,
+    closed: isWaypointRouteClosed(filteredWaypoints),
     meta: {
-      estimatedLength: estimateWaypointPathLength(orbitRoute),
+      estimatedLength: estimateWaypointPathLength(filteredWaypoints),
       loops,
       direction: direction.toUpperCase(),
     },
@@ -578,6 +581,7 @@ function generateCorridorMission({
 
 function generateSpiralMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const {
@@ -626,23 +630,20 @@ function generateSpiralMission({
     spiralDirection === 'outward'
       ? dedupedOutwardRoute
       : [...dedupedOutwardRoute].reverse()
-  const segments = routePoints.slice(1).map((point, index) => [
-    routePoints[index],
-    point,
-  ] as [Vec2, Vec2])
+  const spiralCandidates: MissionWaypoint[] = routePoints.map((point) => ({
+    id: 0,
+    x: Math.round(point.x * 100) / 100,
+    y: Math.round(point.y * 100) / 100,
+    z: scanAltitude,
+    actions: [],
+  }))
   const waypoints = normalizeWaypointIds(
-    routePoints.map((point) => ({
-      id: 0,
-      x: Math.round(point.x * 100) / 100,
-      y: Math.round(point.y * 100) / 100,
-      z: scanAltitude,
-      actions: [],
-    })),
+    filterWaypointsOutsideExclusions(spiralCandidates, exclusionZones),
   )
 
   return {
     patternId: 'spiral',
-    segments,
+    segments: buildSegmentsFromWaypointRoute(waypoints),
     waypoints,
     closed: false,
     meta: {
@@ -651,6 +652,52 @@ function generateSpiralMission({
       direction: `${spiralDirection.toUpperCase()} ${rotationDirection.toUpperCase()}`,
     },
   }
+}
+
+function filterWaypointsOutsideExclusions(
+  waypoints: MissionWaypoint[],
+  exclusionZones: ExclusionZone[],
+): MissionWaypoint[] {
+  if (exclusionZones.length === 0) {
+    return [...waypoints]
+  }
+
+  return waypoints.filter(
+    (waypoint) =>
+      !isPointInAnyExclusion(
+        {
+          x: waypoint.x,
+          y: waypoint.y,
+        },
+        exclusionZones,
+      ),
+  )
+}
+
+function buildSegmentsFromWaypointRoute(
+  waypoints: MissionWaypoint[],
+): Array<[Vec2, Vec2]> {
+  const segments: Array<[Vec2, Vec2]> = []
+
+  for (let index = 1; index < waypoints.length; index += 1) {
+    segments.push([
+      { x: waypoints[index - 1].x, y: waypoints[index - 1].y },
+      { x: waypoints[index].x, y: waypoints[index].y },
+    ])
+  }
+
+  return segments
+}
+
+function isWaypointRouteClosed(waypoints: MissionWaypoint[]): boolean {
+  if (waypoints.length < 3) {
+    return false
+  }
+
+  const first = waypoints[0]
+  const last = waypoints[waypoints.length - 1]
+
+  return distanceBetween2D(first, last) < 0.01
 }
 
 function getPerimeterRing(

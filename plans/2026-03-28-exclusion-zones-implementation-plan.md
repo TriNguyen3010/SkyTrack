@@ -316,7 +316,7 @@ Status: implemented, build/lint/test passed. `coverage`, `grid`, and `corridor` 
 
 ### Stream E: Full Pattern Support + Polish v1
 
-Status: pending.
+Status: implemented, build/lint/test passed. `perimeter`, `orbit`, and `spiral` now filter generated waypoints against enabled exclusions and rebuild displayed route segments accordingly. v1 warning/polish now includes selected-zone validation feedback, disabled-zone rendering, and generated-stage fallback when exclusions eliminate the full mission route.
 
 #### Scope
 
@@ -383,5 +383,5 @@ Lý do:
 - [x] Stream B: Geometry + Validation Core
 - [x] Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
 - [x] Stream D: Phase A Pattern Integration
-- [ ] Stream E: Full Pattern Support + Polish v1
+- [x] Stream E: Full Pattern Support + Polish v1
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Exclusion Zones Spec
