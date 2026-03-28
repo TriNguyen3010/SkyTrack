@@ -74,6 +74,7 @@ interface MissionState {
   activeExclusionZoneId: number | null
   drawingTarget: DrawingTarget
   waypointDensity: WaypointDensityConfig
+  generatedWaypointDensity: WaypointDensityConfig | null
   generatedPatternId: FlightPatternId | null
   generatedPatternMeta: FlightPatternMissionMeta | null
   generatedSegments: Array<[Vec2, Vec2]>
@@ -108,7 +109,10 @@ interface MissionState {
   startDrawing: () => void
   cancelDrawing: () => void
   closePolygon: () => void
-  generatePath: (mission: FlightPatternMissionResult) => void
+  generatePath: (
+    mission: FlightPatternMissionResult,
+    densityConfig: WaypointDensityConfig,
+  ) => void
   editGeneratedPath: () => void
   redrawMission: () => void
   resetMission: () => void
@@ -170,6 +174,7 @@ function clearDerivedMissionState() {
     generatedSegments: [] as Array<[Vec2, Vec2]>,
     generatedAnchorWaypoints: [] as MissionWaypoint[],
     generatedPathSegments: [] as PathSegment[],
+    generatedWaypointDensity: null as WaypointDensityConfig | null,
     generatedClosed: false,
     waypoints: [] as MissionWaypoint[],
     selectedWaypointId: null as number | null,
@@ -206,6 +211,7 @@ const initialState = {
   activeExclusionZoneId: null as number | null,
   drawingTarget: 'boundary' as DrawingTarget,
   waypointDensity: { ...DEFAULT_WAYPOINT_DENSITY_CONFIG } as WaypointDensityConfig,
+  generatedWaypointDensity: null as WaypointDensityConfig | null,
   generatedPatternId: null as FlightPatternId | null,
   generatedPatternMeta: null as FlightPatternMissionMeta | null,
   generatedSegments: [] as Array<[Vec2, Vec2]>,
@@ -419,9 +425,10 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             }
           : state,
     ),
-  generatePath: (mission) =>
+  generatePath: (mission, densityConfig) =>
     set((state) => ({
       stage: 'generated',
+      generatedWaypointDensity: { ...densityConfig },
       generatedPatternId: mission.patternId,
       generatedPatternMeta: mission.meta,
       generatedSegments: mission.segments,

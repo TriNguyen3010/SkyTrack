@@ -146,11 +146,20 @@ describe('useMissionStore exclusion zone foundation', () => {
     createBoundary()
 
     const mission = createGeneratedMission()
-    useMissionStore.getState().generatePath(mission)
+    useMissionStore.getState().generatePath(mission, {
+      mode: 'auto',
+      targetCount: null,
+      targetSpacing: null,
+    })
 
     const state = useMissionStore.getState()
 
     expect(state.stage).toBe('generated')
+    expect(state.generatedWaypointDensity).toEqual({
+      mode: 'auto',
+      targetCount: null,
+      targetSpacing: null,
+    })
     expect(state.generatedPatternId).toBe('coverage')
     expect(state.generatedPatternMeta).toEqual(mission.meta)
     expect(state.generatedSegments).toEqual(mission.segments)
@@ -174,7 +183,11 @@ describe('useMissionStore exclusion zone foundation', () => {
     store.addPoint(10, -10)
     store.addPoint(0, 10)
     store.closePolygon()
-    store.generatePath(createGeneratedMission())
+    store.generatePath(createGeneratedMission(), {
+      mode: 'auto',
+      targetCount: null,
+      targetSpacing: null,
+    })
     store.toggleExclusionZone(zoneId)
 
     const state = useMissionStore.getState()
@@ -185,6 +198,7 @@ describe('useMissionStore exclusion zone foundation', () => {
     expect(state.generatedSegments).toEqual([])
     expect(state.generatedAnchorWaypoints).toEqual([])
     expect(state.generatedPathSegments).toEqual([])
+    expect(state.generatedWaypointDensity).toBeNull()
     expect(state.waypoints).toEqual([])
   })
 })

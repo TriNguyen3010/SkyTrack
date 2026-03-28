@@ -41,6 +41,9 @@ import {
   DroneProfileSelector,
 } from './components/DroneProfileSelector'
 import {
+  WaypointDensityPanel,
+} from './components/WaypointDensityPanel'
+import {
   MissionViewport3D,
   type WaypointContextMenuRequest,
   type ViewportAnimationState,
@@ -102,6 +105,9 @@ import type {
   DroneProfile,
   WaypointBatteryEstimate,
 } from './lib/batteryModels'
+import {
+  computeWaypointDensityMetrics,
+} from './lib/waypointDensity'
 import './App.css'
 
 const toolbarItems = [
@@ -142,9 +148,16 @@ function App() {
   const activeExclusionZoneId = useMissionStore((state) => state.activeExclusionZoneId)
   const drawingTarget = useMissionStore((state) => state.drawingTarget)
   const waypointDensity = useMissionStore((state) => state.waypointDensity)
+  const generatedWaypointDensity = useMissionStore(
+    (state) => state.generatedWaypointDensity,
+  )
   const generatedPatternId = useMissionStore((state) => state.generatedPatternId)
   const generatedPatternMeta = useMissionStore((state) => state.generatedPatternMeta)
   const generatedSegments = useMissionStore((state) => state.generatedSegments)
+  const generatedAnchorWaypoints = useMissionStore(
+    (state) => state.generatedAnchorWaypoints,
+  )
+  const generatedPathSegments = useMissionStore((state) => state.generatedPathSegments)
   const generatedClosed = useMissionStore((state) => state.generatedClosed)
   const waypoints = useMissionStore((state) => state.waypoints)
   const selectedWaypointId = useMissionStore((state) => state.selectedWaypointId)
@@ -158,6 +171,9 @@ function App() {
   const setOrientation = useMissionStore((state) => state.setOrientation)
   const setDroneProfileId = useMissionStore((state) => state.setDroneProfileId)
   const setSafetyPresetId = useMissionStore((state) => state.setSafetyPresetId)
+  const setWaypointDensityMode = useMissionStore((state) => state.setWaypointDensityMode)
+  const setTargetWaypointCount = useMissionStore((state) => state.setTargetWaypointCount)
+  const setTargetWaypointSpacing = useMissionStore((state) => state.setTargetWaypointSpacing)
   const addExclusionZone = useMissionStore((state) => state.addExclusionZone)
   const removeExclusionZone = useMissionStore((state) => state.removeExclusionZone)
   const renameExclusionZone = useMissionStore((state) => state.renameExclusionZone)
@@ -217,6 +233,7 @@ function App() {
   const [actionEditorFocusToken, setActionEditorFocusToken] = useState(0)
   const [isBatteryBreakdownExpanded, setIsBatteryBreakdownExpanded] =
     useState(false)
+  const [isWaypointDensityExpanded, setIsWaypointDensityExpanded] = useState(false)
   const [viewportStageSize, setViewportStageSize] = useState({
     width: 0,
     height: 0,
@@ -391,6 +408,34 @@ function App() {
       resolvedSafetyPreset,
     ],
   )
+  const generatedDensityMetrics = useMemo(
+    () =>
+      computeWaypointDensityMetrics({
+        anchors: generatedAnchorWaypoints,
+        waypoints,
+        pathSegments: generatedPathSegments,
+        constraints: {
+          minSpacing: 2,
+          maxWaypoints: null,
+        },
+      }),
+    [generatedAnchorWaypoints, generatedPathSegments, waypoints],
+  )
+  const densitySignature = useMemo(
+    () => serializeWaypointDensityConfig(waypointDensity),
+    [waypointDensity],
+  )
+  const generatedDensitySignature = useMemo(
+    () =>
+      generatedWaypointDensity
+        ? serializeWaypointDensityConfig(generatedWaypointDensity)
+        : null,
+    [generatedWaypointDensity],
+  )
+  const isGeneratedDensityPending =
+    stage === 'generated' &&
+    generatedDensitySignature !== null &&
+    densitySignature !== generatedDensitySignature
   const selectedWaypointBatteryEstimate = useMemo(
     () =>
       selectedWaypoint && generatedBatteryReport
@@ -834,6 +879,44 @@ function App() {
     setInteractionNotice(null)
   }
 
+  useEffect(() => {
+    if (
+      stage !== 'generated' ||
+      !selectedPatternMission ||
+      generatedDensitySignature === null ||
+      generatedDensitySignature === densitySignature
+    ) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (selectedPatternMission.waypoints.length === 0) {
+        editGeneratedPath()
+        setInteractionNotice({
+          tone: 'warning',
+          message:
+            'No valid route remains for the current waypoint density. Review the density settings and try again.',
+        })
+        return
+      }
+
+      clearInteractionNotice()
+      generateMissionPath(selectedPatternMission, waypointDensity)
+    }, 150)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [
+    densitySignature,
+    editGeneratedPath,
+    generateMissionPath,
+    generatedDensitySignature,
+    selectedPatternMission,
+    stage,
+    waypointDensity,
+  ])
+
   function updatePatternParams<K extends FlightPatternId>(
     patternId: K,
     patch: Partial<PatternParamsMap[K]>,
@@ -957,7 +1040,7 @@ function App() {
     }
 
     clearInteractionNotice()
-    generateMissionPath(selectedPatternMission)
+    generateMissionPath(selectedPatternMission, waypointDensity)
   }
 
   function handleResetMission() {
@@ -1019,6 +1102,33 @@ function App() {
         : null,
     )
     toggleExclusionZone(zoneId)
+  }
+
+  function handleWaypointDensityModeChange(
+    mode: 'auto' | 'count' | 'spacing',
+  ) {
+    setWaypointDensityMode(mode)
+  }
+
+  function handleWaypointDensityCountChange(value: number) {
+    if (!Number.isFinite(value)) {
+      return
+    }
+
+    const clampedValue =
+      generatedDensityMetrics.maximumCount !== null
+        ? Math.min(value, generatedDensityMetrics.maximumCount)
+        : value
+
+    setTargetWaypointCount(Math.max(generatedDensityMetrics.minimumCount, clampedValue))
+  }
+
+  function handleWaypointDensitySpacingChange(value: number) {
+    if (!Number.isFinite(value)) {
+      return
+    }
+
+    setTargetWaypointSpacing(Math.max(2, value))
   }
 
   function handleSelectPattern(patternId: FlightPatternId) {
@@ -2143,6 +2253,19 @@ function App() {
                     }
                   />
                 )}
+
+                <WaypointDensityPanel
+                  config={waypointDensity}
+                  metrics={generatedDensityMetrics}
+                  isExpanded={isWaypointDensityExpanded}
+                  isPending={isGeneratedDensityPending}
+                  onToggleExpanded={() =>
+                    setIsWaypointDensityExpanded((current) => !current)
+                  }
+                  onModeChange={handleWaypointDensityModeChange}
+                  onCountChange={handleWaypointDensityCountChange}
+                  onSpacingChange={handleWaypointDensitySpacingChange}
+                />
 
                 <ExclusionZoneSection
                   zones={exclusionZones}
@@ -3644,6 +3767,14 @@ function renderWaypointActionIcon(type: MissionWaypointActionType) {
     case 'trigger_sensor':
       return <Radar size={15} strokeWidth={2.1} />
   }
+}
+
+function serializeWaypointDensityConfig(config: {
+  mode: string
+  targetCount: number | null
+  targetSpacing: number | null
+}): string {
+  return JSON.stringify(config)
 }
 
 export default App
