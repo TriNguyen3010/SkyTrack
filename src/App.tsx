@@ -782,6 +782,23 @@ function App() {
       return undefined
     }
 
+    if (selectedPatternMission.waypoints.length === 0) {
+      const frameId = window.requestAnimationFrame(() => {
+        editGeneratedPath()
+        setInteractionNotice({
+          tone: 'warning',
+          message:
+            enabledExclusionZones.length > 0
+              ? 'Excluded areas remove the full scan path. Adjust or disable a zone and try again.'
+              : 'Mission path is no longer available for the current region.',
+        })
+      })
+
+      return () => {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+
     if (areWaypointRoutesEquivalent(waypoints, selectedPatternMission.waypoints)) {
       return undefined
     }
@@ -793,7 +810,14 @@ function App() {
     return () => {
       window.cancelAnimationFrame(frameId)
     }
-  }, [generateMissionPath, selectedPatternMission, stage, waypoints])
+  }, [
+    editGeneratedPath,
+    enabledExclusionZones.length,
+    generateMissionPath,
+    selectedPatternMission,
+    stage,
+    waypoints,
+  ])
 
   useEffect(() => {
     if (scanAltitude !== activePatternParams.scanAltitude) {
@@ -944,7 +968,10 @@ function App() {
     if (!isPolygonValid || generatedWaypoints.length === 0) {
       setInteractionNotice({
         tone: 'warning',
-        message: 'Mission path is only available after the polygon boundary is valid.',
+        message:
+          enabledExclusionZones.length > 0
+            ? 'No valid route remains after applying the excluded areas.'
+            : 'Mission path is only available after the polygon boundary is valid.',
       })
       return
     }

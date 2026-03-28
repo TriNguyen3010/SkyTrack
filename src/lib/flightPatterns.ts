@@ -4,6 +4,7 @@ import {
   polygonCentroid,
   type Vec2,
 } from './missionGeometry'
+import { clipSegmentsAgainstExclusions } from './exclusionGeometry'
 import type {
   ExclusionZone,
   MissionPoint,
@@ -364,10 +365,12 @@ export function clampPatternParams<K extends FlightPatternId>(
 
 function generateCoverageMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, lineSpacing, orientation } = paramsByPattern.coverage
-  const segments = generateCoverageSegments(points, lineSpacing, orientation)
+  const rawSegments = generateCoverageSegments(points, lineSpacing, orientation)
+  const segments = clipSegmentsAgainstExclusions(rawSegments, exclusionZones)
   const waypoints = generateCoverageWaypoints(segments, scanAltitude)
 
   return {
@@ -501,14 +504,21 @@ function generateOrbitMission({
 
 function generateGridMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, lineSpacing, orientation, crossAngle } = paramsByPattern.grid
-  const primarySegments = generateCoverageSegments(points, lineSpacing, orientation)
-  const secondarySegments = generateCoverageSegments(
-    points,
-    lineSpacing,
-    orientation + crossAngle,
+  const primarySegments = clipSegmentsAgainstExclusions(
+    generateCoverageSegments(points, lineSpacing, orientation),
+    exclusionZones,
+  )
+  const secondarySegments = clipSegmentsAgainstExclusions(
+    generateCoverageSegments(
+      points,
+      lineSpacing,
+      orientation + crossAngle,
+    ),
+    exclusionZones,
   )
   const primaryWaypoints = generateCoverageWaypoints(primarySegments, scanAltitude)
   const secondaryWaypoints = generateCoverageWaypoints(
@@ -539,10 +549,14 @@ function generateGridMission({
 
 function generateCorridorMission({
   points,
+  exclusionZones,
   paramsByPattern,
 }: FlightPatternBuildContext): FlightPatternMissionResult {
   const { scanAltitude, passes, passSpacing, direction } = paramsByPattern.corridor
-  const corridorSegments = buildCorridorSegments(points, passes, passSpacing)
+  const corridorSegments = clipSegmentsAgainstExclusions(
+    buildCorridorSegments(points, passes, passSpacing),
+    exclusionZones,
+  )
   const orderedSegments =
     direction === 'reverse' ? [...corridorSegments].reverse() : corridorSegments
   const waypoints = normalizeWaypointIds(

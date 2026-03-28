@@ -293,7 +293,7 @@ Status: implemented, build/lint/test passed. Editing/generated sidebar now expos
 
 ### Stream D: Phase A Pattern Integration
 
-Status: pending.
+Status: implemented, build/lint/test passed. `coverage`, `grid`, and `corridor` now clip scan segments against enabled exclusion zones through [flightPatterns.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/flightPatterns.ts), with integration coverage in [flightPatterns.exclusion.test.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/flightPatterns.exclusion.test.ts). Generated missions auto-regenerate when exclusion state changes and gracefully fall back to editing if exclusions remove the full route.
 
 #### Scope
 
@@ -382,6 +382,6 @@ Lý do:
 - [x] Stream A: Data Model + Store Foundation
 - [x] Stream B: Geometry + Validation Core
 - [x] Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
-- [ ] Stream D: Phase A Pattern Integration
+- [x] Stream D: Phase A Pattern Integration
 - [ ] Stream E: Full Pattern Support + Polish v1
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Exclusion Zones Spec
