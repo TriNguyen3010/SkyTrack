@@ -253,7 +253,7 @@ function App() {
   const waypointRadialMenuRef = useRef<HTMLDivElement | null>(null)
   const waypointActionEditorRef = useRef<HTMLDivElement | null>(null)
   const behaviorListRef = useRef<HTMLDivElement | null>(null)
-  const waypointRowRefs = useRef(new Map<number, HTMLButtonElement | null>())
+  const waypointRowRefs = useRef(new Map<number, HTMLDivElement | null>())
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
   const previousSelectedPatternRef = useRef(selectedPattern)
@@ -2558,37 +2558,34 @@ function App() {
                       waypointRowRefs.current.delete(waypoint.id)
                     }}
                     onSelect={selectWaypoint}
-                  />
+                  >
+                    {selectedWaypointId === waypoint.id && (
+                      <div ref={waypointActionEditorRef}>
+                        <WaypointActionEditor
+                          key={waypoint.id}
+                          waypoint={waypoint}
+                          allWaypoints={orderedWaypoints}
+                          effectiveStartWaypointId={displayStartWaypointId}
+                          missionEndWaypointId={displayEndWaypointId}
+                          batteryEstimate={selectedWaypointBatteryEstimate}
+                          actionEnergyEstimate={selectedWaypointActionEstimate}
+                          actionCostBreakdown={selectedWaypointActionBreakdown}
+                          validationMessages={selectedWaypointValidationMessages}
+                          pendingActionType={pendingActionType}
+                          selectedActionDescription={selectedActionOption.description}
+                          onPendingActionTypeChange={setPendingActionType}
+                          onAddAction={addWaypointAction}
+                          onDuplicateAction={duplicateWaypointAction}
+                          onApplyActionToTargets={applyWaypointActionToTargets}
+                          onUpdateAction={updateWaypointAction}
+                          onRemoveAction={removeWaypointAction}
+                          onMoveAction={moveWaypointAction}
+                          isInline
+                        />
+                      </div>
+                    )}
+                  </WaypointBehaviorRow>
                 ))}
-
-                {selectedWaypoint ? (
-                  <div ref={waypointActionEditorRef}>
-                    <WaypointActionEditor
-                      key={selectedWaypoint.id}
-                      waypoint={selectedWaypoint}
-                      allWaypoints={orderedWaypoints}
-                      effectiveStartWaypointId={displayStartWaypointId}
-                      missionEndWaypointId={displayEndWaypointId}
-                      batteryEstimate={selectedWaypointBatteryEstimate}
-                      actionEnergyEstimate={selectedWaypointActionEstimate}
-                      actionCostBreakdown={selectedWaypointActionBreakdown}
-                      validationMessages={selectedWaypointValidationMessages}
-                      pendingActionType={pendingActionType}
-                      selectedActionDescription={selectedActionOption.description}
-                      onPendingActionTypeChange={setPendingActionType}
-                      onAddAction={addWaypointAction}
-                      onDuplicateAction={duplicateWaypointAction}
-                      onApplyActionToTargets={applyWaypointActionToTargets}
-                      onUpdateAction={updateWaypointAction}
-                      onRemoveAction={removeWaypointAction}
-                      onMoveAction={moveWaypointAction}
-                    />
-                  </div>
-                ) : (
-                  <div className="empty-action-state">
-                    Select a waypoint to configure node actions.
-                  </div>
-                )}
               </div>
             ) : (
             <button type="button" className="button behavior-button">
@@ -2855,6 +2852,7 @@ function WaypointBehaviorRow({
   onHoverChange,
   onRegisterRow,
   onSelect,
+  children,
 }: {
   waypoint: MissionWaypoint
   isSelected: boolean
@@ -2863,15 +2861,15 @@ function WaypointBehaviorRow({
   isEndNode: boolean
   isClosedLoop: boolean
   onHoverChange: (id: number | null) => void
-  onRegisterRow: (node: HTMLButtonElement | null) => void
-  onSelect: (id: number) => void
+  onRegisterRow: (node: HTMLDivElement | null) => void
+  onSelect: (id: number | null) => void
+  children?: ReactNode
 }) {
   const actionSummary = summarizeWaypointActionStack(waypoint.actions)
 
   return (
-    <button
+    <div
       ref={onRegisterRow}
-      type="button"
       className={`waypoint-row ${isSelected ? 'is-selected' : ''} ${
         isHovered ? 'is-hovered' : ''
       } ${waypoint.role === 'intermediate' ? 'is-intermediate' : ''} ${
@@ -2879,46 +2877,52 @@ function WaypointBehaviorRow({
       }`}
       onMouseEnter={() => onHoverChange(waypoint.id)}
       onMouseLeave={() => onHoverChange(null)}
-      onClick={() => onSelect(waypoint.id)}
     >
-      <div className="waypoint-row-top">
-        <div className="waypoint-index">{waypoint.id}</div>
-        <div className="waypoint-copy">
-          <strong>Navigate to waypoint</strong>
-          <div className="waypoint-row-meta">
-            <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
-            <span
-              className={`waypoint-role-pill ${
-                waypoint.role === 'anchor' ? 'is-anchor' : 'is-intermediate'
-              }`}
-            >
-              {waypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'}
-            </span>
-            {isStartNode && (
-              <span className="waypoint-status-pill is-start">
-                {isClosedLoop ? 'Start / Return' : 'Start Node'}
+      <button
+        type="button"
+        className="waypoint-row-trigger"
+        onClick={() => onSelect(isSelected ? null : waypoint.id)}
+      >
+        <div className="waypoint-row-top">
+          <div className="waypoint-index">{waypoint.id}</div>
+          <div className="waypoint-copy">
+            <strong>Navigate to waypoint</strong>
+            <div className="waypoint-row-meta">
+              <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
+              <span
+                className={`waypoint-role-pill ${
+                  waypoint.role === 'anchor' ? 'is-anchor' : 'is-intermediate'
+                }`}
+              >
+                {waypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'}
               </span>
-            )}
-            {isEndNode && (
-              <span className="waypoint-status-pill is-end">End Node</span>
-            )}
-            {waypoint.actions.length > 0 && (
-              <span className="waypoint-action-pill">
-                {waypoint.actions.length} action
-                {waypoint.actions.length > 1 ? 's' : ''}
-              </span>
-            )}
+              {isStartNode && (
+                <span className="waypoint-status-pill is-start">
+                  {isClosedLoop ? 'Start / Return' : 'Start Node'}
+                </span>
+              )}
+              {isEndNode && (
+                <span className="waypoint-status-pill is-end">End Node</span>
+              )}
+              {waypoint.actions.length > 0 && (
+                <span className="waypoint-action-pill">
+                  {waypoint.actions.length} action
+                  {waypoint.actions.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {actionSummary && <span className="waypoint-action-summary">{actionSummary}</span>}
           </div>
-          {actionSummary && <span className="waypoint-action-summary">{actionSummary}</span>}
         </div>
-      </div>
+        <div className="waypoint-coordinates">
+          <CoordinatePill label="Location X" value={formatWaypointCoordinate(waypoint.x)} />
+          <CoordinatePill label="Location Y" value={formatWaypointCoordinate(waypoint.y)} />
+          <CoordinatePill label="Location Z" value={formatWaypointCoordinate(waypoint.z)} />
+        </div>
+      </button>
 
-      <div className="waypoint-coordinates">
-        <CoordinatePill label="Location X" value={formatWaypointCoordinate(waypoint.x)} />
-        <CoordinatePill label="Location Y" value={formatWaypointCoordinate(waypoint.y)} />
-        <CoordinatePill label="Location Z" value={formatWaypointCoordinate(waypoint.z)} />
-      </div>
-    </button>
+      {isSelected && children}
+    </div>
   )
 }
 
@@ -2940,6 +2944,7 @@ function WaypointActionEditor({
   onUpdateAction,
   onRemoveAction,
   onMoveAction,
+  isInline = false,
 }: {
   waypoint: MissionWaypoint
   allWaypoints: MissionWaypoint[]
@@ -2977,6 +2982,7 @@ function WaypointActionEditor({
     actionId: number,
     direction: 'up' | 'down',
   ) => void
+  isInline?: boolean
 }) {
   const [expandedActionIds, setExpandedActionIds] = useState<Record<number, boolean>>(
     () => getInitialExpandedActionIds(waypoint.actions),
@@ -3026,11 +3032,15 @@ function WaypointActionEditor({
   }
 
   return (
-    <div className="action-editor-card">
+    <div className={`action-editor-card ${isInline ? 'is-inline' : ''}`}>
       <div className="action-editor-header">
         <div className="action-editor-copy">
-          <strong>Waypoint {waypoint.id} Actions</strong>
-          <span>Assign mission behaviors to this node.</span>
+          <strong>{isInline ? `Waypoint ${waypoint.id} Actions` : `Waypoint ${waypoint.id} Actions`}</strong>
+          <span>
+            {isInline
+              ? 'Configure this waypoint without leaving its card.'
+              : 'Assign mission behaviors to this node.'}
+          </span>
         </div>
         <div className="action-editor-count">
           {waypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'} ·{' '}

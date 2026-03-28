@@ -2011,10 +2011,20 @@
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
   padding: 12px;
+}
+
+.waypoint-row-trigger {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
   text-align: left;
   cursor: pointer;
 }
@@ -2176,6 +2186,11 @@
   border-radius: 12px;
   background: linear-gradient(180deg, #fcfcff 0%, #f8f8ff 100%);
   padding: 14px;
+}
+
+.action-editor-card.is-inline {
+  border-color: rgba(108, 92, 231, 0.16);
+  background: rgba(250, 248, 255, 0.96);
 }
 
 .action-editor-header {
