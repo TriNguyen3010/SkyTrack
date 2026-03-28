@@ -235,7 +235,7 @@ Status: implemented, build/lint/test passed. `ExclusionZone`, `drawingTarget`, `
 
 ### Stream B: Geometry + Validation Core
 
-Status: pending.
+Status: implemented, build/lint/test passed. Shared exclusion clipping and validation utilities now live in [exclusionGeometry.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/exclusionGeometry.ts) and [exclusionValidation.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/exclusionValidation.ts), with coverage for clipping, edge-touch tolerance, outside-boundary warnings, and overlap detection in [exclusionGeometry.test.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/exclusionGeometry.test.ts) and [exclusionValidation.test.ts](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/lib/exclusionValidation.test.ts).
 
 #### Scope
 
@@ -380,7 +380,7 @@ Lý do:
 ## 11. Checklist tổng
 
 - [x] Stream A: Data Model + Store Foundation
-- [ ] Stream B: Geometry + Validation Core
+- [x] Stream B: Geometry + Validation Core
 - [ ] Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
 - [ ] Stream D: Phase A Pattern Integration
 - [ ] Stream E: Full Pattern Support + Polish v1
