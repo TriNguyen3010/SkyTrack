@@ -32,10 +32,26 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  BatterySummaryBar,
+} from './components/BatterySummaryBar'
+import {
+  DroneProfileSelector,
+} from './components/DroneProfileSelector'
+import {
   MissionViewport3D,
   type WaypointContextMenuRequest,
   type ViewportAnimationState,
 } from './components/MissionViewport3D'
+import {
+  computeBatteryReport,
+  computeWaypointActionEnergy,
+} from './lib/batteryEstimation'
+import {
+  DRONE_PRESETS,
+  getSafetyPreset,
+  resolveDroneProfile,
+  SAFETY_PRESETS,
+} from './lib/batteryPresets'
 import {
   buildFlightPatternMission,
   clampPatternParams,
@@ -74,6 +90,10 @@ import {
   getWaypointValidationWarnings,
   isBulkAssignActive,
 } from './lib/waypointInteraction'
+import type {
+  DroneProfile,
+  WaypointBatteryEstimate,
+} from './lib/batteryModels'
 import './App.css'
 
 const toolbarItems = [
@@ -105,6 +125,10 @@ function App() {
   const scanAltitude = useMissionStore((state) => state.scanAltitude)
   const lineSpacing = useMissionStore((state) => state.lineSpacing)
   const orientation = useMissionStore((state) => state.orientation)
+  const droneProfileId = useMissionStore((state) => state.droneProfileId)
+  const droneProfileOverrides = useMissionStore((state) => state.droneProfileOverrides)
+  const homePoint = useMissionStore((state) => state.homePoint)
+  const safetyPresetId = useMissionStore((state) => state.safetyPresetId)
   const points = useMissionStore((state) => state.points)
   const waypoints = useMissionStore((state) => state.waypoints)
   const selectedWaypointId = useMissionStore((state) => state.selectedWaypointId)
@@ -116,6 +140,8 @@ function App() {
   const setScanAltitude = useMissionStore((state) => state.setScanAltitude)
   const setLineSpacing = useMissionStore((state) => state.setLineSpacing)
   const setOrientation = useMissionStore((state) => state.setOrientation)
+  const setDroneProfileId = useMissionStore((state) => state.setDroneProfileId)
+  const setSafetyPresetId = useMissionStore((state) => state.setSafetyPresetId)
   const enterSetup = useMissionStore((state) => state.enterSetup)
   const cancelSetup = useMissionStore((state) => state.cancelSetup)
   const startDrawing = useMissionStore((state) => state.startDrawing)
@@ -168,6 +194,8 @@ function App() {
     useState<ViewportAnimationState>('settled')
   const [skipAnimationToken, setSkipAnimationToken] = useState(0)
   const [actionEditorFocusToken, setActionEditorFocusToken] = useState(0)
+  const [isBatteryBreakdownExpanded, setIsBatteryBreakdownExpanded] =
+    useState(false)
   const [viewportStageSize, setViewportStageSize] = useState({
     width: 0,
     height: 0,
@@ -182,6 +210,18 @@ function App() {
   const selectedPatternOption = useMemo(
     () => getFlightPatternDefinition(selectedPattern),
     [selectedPattern],
+  )
+  const resolvedDroneProfile = useMemo(
+    () => resolveDroneProfile(droneProfileId, droneProfileOverrides),
+    [droneProfileId, droneProfileOverrides],
+  )
+  const resolvedSafetyPreset = useMemo(
+    () => getSafetyPreset(safetyPresetId),
+    [safetyPresetId],
+  )
+  const theoreticalFlightMinutes = useMemo(
+    () => estimateTheoreticalFlightMinutes(resolvedDroneProfile),
+    [resolvedDroneProfile],
   )
   const hoveredPatternOption = useMemo(
     () =>
@@ -230,6 +270,19 @@ function App() {
     [selectedPatternMission],
   )
   const selectedPatternMeta = selectedPatternMission?.meta ?? null
+  const previewBatteryReport = useMemo(
+    () =>
+      selectedPatternMission
+        ? computeBatteryReport({
+            droneProfile: resolvedDroneProfile,
+            waypoints: selectedPatternMission.waypoints,
+            homePoint,
+            isClosedLoop: selectedPatternMission.closed,
+            safetyPreset: resolvedSafetyPreset,
+          })
+        : null,
+    [homePoint, resolvedDroneProfile, resolvedSafetyPreset, selectedPatternMission],
+  )
   const waypointInteractionModel = useMemo(
     () =>
       deriveWaypointInteractionModel({
@@ -251,6 +304,52 @@ function App() {
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
     [selectedWaypointId, waypoints],
+  )
+  const generatedBatteryReport = useMemo(
+    () =>
+      orderedWaypoints.length > 0
+        ? computeBatteryReport({
+            droneProfile: resolvedDroneProfile,
+            waypoints: orderedWaypoints,
+            homePoint,
+            isClosedLoop: isClosedMissionLoop,
+            safetyPreset: resolvedSafetyPreset,
+          })
+        : null,
+    [
+      homePoint,
+      isClosedMissionLoop,
+      orderedWaypoints,
+      resolvedDroneProfile,
+      resolvedSafetyPreset,
+    ],
+  )
+  const selectedWaypointBatteryEstimate = useMemo(
+    () =>
+      selectedWaypoint && generatedBatteryReport
+        ? generatedBatteryReport.waypointEstimates.find(
+            (estimate) => estimate.waypointId === selectedWaypoint.id,
+          ) ?? null
+        : null,
+    [generatedBatteryReport, selectedWaypoint],
+  )
+  const selectedWaypointActionEstimate = useMemo(
+    () =>
+      selectedWaypoint
+        ? computeWaypointActionEnergy({
+            actions: selectedWaypoint.actions,
+            startAltitude: selectedWaypoint.z,
+            droneProfile: resolvedDroneProfile,
+          })
+        : null,
+    [resolvedDroneProfile, selectedWaypoint],
+  )
+  const selectedWaypointActionBreakdown = useMemo(
+    () =>
+      selectedWaypoint
+        ? getWaypointActionCostBreakdown(selectedWaypoint, resolvedDroneProfile)
+        : [],
+    [resolvedDroneProfile, selectedWaypoint],
   )
   const selectedActionOption = useMemo(
     () =>
@@ -1276,6 +1375,17 @@ function App() {
                   <div className="slider-value">{scanAltitude}m</div>
                 </div>
 
+                <DroneProfileSelector
+                  droneProfileId={droneProfileId}
+                  safetyPresetId={safetyPresetId}
+                  droneProfiles={DRONE_PRESETS}
+                  safetyPresets={SAFETY_PRESETS}
+                  resolvedDroneProfile={resolvedDroneProfile}
+                  maxFlightMinutes={theoreticalFlightMinutes}
+                  onDroneProfileChange={setDroneProfileId}
+                  onSafetyPresetChange={setSafetyPresetId}
+                />
+
                 <div className="button-row">
                   <button type="button" className="button button-cancel" onClick={cancelSetup}>
                     Cancel
@@ -1338,6 +1448,35 @@ function App() {
                     <strong>{points.length}</strong>
                   </div>
                 </div>
+
+                {previewBatteryReport && (
+                  <div
+                    className={`quick-estimate-card ${
+                      previewBatteryReport.isFeasible ? 'is-feasible' : 'is-critical'
+                    }`}
+                  >
+                    <div className="quick-estimate-top">
+                      <strong>
+                        {previewBatteryReport.isFeasible
+                          ? `Estimated feasible (~${Math.round(
+                              previewBatteryReport.batteryUsedPercent,
+                            )}% battery budget)`
+                          : `Likely over budget (~${Math.round(
+                              previewBatteryReport.batteryUsedPercent,
+                            )}% battery budget)`}
+                      </strong>
+                      <span>{selectedPatternOption.shortLabel}</span>
+                    </div>
+                    <span className="quick-estimate-meta">
+                      ~{Math.round(previewBatteryReport.totalDistanceM)}m path ·{' '}
+                      {formatDurationShort(previewBatteryReport.totalMissionTimeSec)} nominal
+                      mission time
+                    </span>
+                    <span className="quick-estimate-footnote">
+                      Estimate only. Actions and real conditions can change this result.
+                    </span>
+                  </div>
+                )}
 
                 {activeNotice && (
                   <div className="validation-card">
@@ -1801,6 +1940,16 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {generatedBatteryReport && (
+                  <BatterySummaryBar
+                    report={generatedBatteryReport}
+                    isExpanded={stage === 'generated' && isBatteryBreakdownExpanded}
+                    onToggle={() =>
+                      setIsBatteryBreakdownExpanded((current) => !current)
+                    }
+                  />
+                )}
               </div>
             )}
           </section>
@@ -1868,6 +2017,9 @@ function App() {
                       allWaypoints={orderedWaypoints}
                       effectiveStartWaypointId={displayStartWaypointId}
                       missionEndWaypointId={displayEndWaypointId}
+                      batteryEstimate={selectedWaypointBatteryEstimate}
+                      actionEnergyEstimate={selectedWaypointActionEstimate}
+                      actionCostBreakdown={selectedWaypointActionBreakdown}
                       validationMessages={selectedWaypointValidationMessages}
                       pendingActionType={pendingActionType}
                       selectedActionDescription={selectedActionOption.description}
@@ -2100,6 +2252,9 @@ function WaypointActionEditor({
   allWaypoints,
   effectiveStartWaypointId,
   missionEndWaypointId,
+  batteryEstimate,
+  actionEnergyEstimate,
+  actionCostBreakdown,
   validationMessages,
   pendingActionType,
   selectedActionDescription,
@@ -2115,6 +2270,16 @@ function WaypointActionEditor({
   allWaypoints: MissionWaypoint[]
   effectiveStartWaypointId: number | null
   missionEndWaypointId: number | null
+  batteryEstimate: WaypointBatteryEstimate | null
+  actionEnergyEstimate: {
+    costMah: number
+    timeSec: number
+  } | null
+  actionCostBreakdown: Array<{
+    actionId: number
+    label: string
+    costMah: number
+  }>
   validationMessages: string[]
   pendingActionType: MissionWaypointActionType
   selectedActionDescription: string
@@ -2255,6 +2420,42 @@ function WaypointActionEditor({
           {validationMessages.slice(1).map((message) => (
             <span key={message}>{message}</span>
           ))}
+        </div>
+      )}
+
+      {(batteryEstimate || actionEnergyEstimate) && (
+        <div className="action-energy-card">
+          <div className="action-energy-header">
+            <strong>Battery impact</strong>
+            {actionEnergyEstimate && (
+              <span>
+                -{Math.round(actionEnergyEstimate.costMah)} mAh ·{' '}
+                {formatDurationShort(actionEnergyEstimate.timeSec)}
+              </span>
+            )}
+          </div>
+
+          {actionCostBreakdown.length > 0 ? (
+            <div className="action-energy-list">
+              {actionCostBreakdown.map((entry) => (
+                <div key={entry.actionId} className="action-energy-row">
+                  <span>{entry.label}</span>
+                  <strong>-{Math.round(entry.costMah)} mAh</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="action-energy-empty">
+              Add actions to see per-node energy impact.
+            </div>
+          )}
+
+          {batteryEstimate && (
+            <div className="action-energy-footnote">
+              Remaining after WP {waypoint.id}: ~{Math.round(batteryEstimate.remainingPercent)}%
+              {' '}· RTH cost from here: {Math.round(batteryEstimate.rthCostFromHereMah)} mAh
+            </div>
+          )}
         </div>
       )}
 
@@ -2748,6 +2949,54 @@ function CoordinatePill({ label, value }: { label: string; value: string }) {
 
 function formatCoordinate(value: number): string {
   return `${Math.round(value * 10) / 10}`
+}
+
+function formatDurationShort(valueSec: number): string {
+  const roundedSec = Math.max(0, Math.round(valueSec))
+  const minutes = Math.floor(roundedSec / 60)
+  const seconds = roundedSec % 60
+
+  if (minutes === 0) {
+    return `${seconds}s`
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function estimateTheoreticalFlightMinutes(droneProfile: DroneProfile): number {
+  const currentMah =
+    (droneProfile.batteryCapacityMah /
+      ((droneProfile.powerCruise / droneProfile.batteryVoltageNominal) * 1000)) *
+    60
+
+  return Math.max(1, Math.round(currentMah))
+}
+
+function getWaypointActionCostBreakdown(
+  waypoint: MissionWaypoint,
+  droneProfile: DroneProfile,
+): Array<{
+  actionId: number
+  label: string
+  costMah: number
+}> {
+  let currentAltitude = waypoint.z
+
+  return waypoint.actions.map((action) => {
+    const estimate = computeWaypointActionEnergy({
+      actions: [action],
+      startAltitude: currentAltitude,
+      droneProfile,
+    })
+
+    currentAltitude = estimate.endAltitude
+
+    return {
+      actionId: action.id,
+      label: getWaypointActionLabel(action.type),
+      costMah: estimate.costMah,
+    }
+  })
 }
 
 function getInitialExpandedActionIds(

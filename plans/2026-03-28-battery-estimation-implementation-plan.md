@@ -233,6 +233,8 @@ Status: implemented, build/lint/test passed. Core nominal battery estimation, di
 
 ### Stream C: Progressive Disclosure UI
 
+Status: implemented, build/lint/test passed. Setup now exposes drone and safety preset selection with theoretical flight time, editing shows a quick feasibility estimate, generated stage has a collapsible battery summary card, and the waypoint action editor shows realtime per-node action energy impact.
+
 #### Scope
 
 - setup stage:
@@ -369,7 +371,7 @@ Lý do:
 
 - [x] Stream A: Data models + store foundation
 - [x] Stream B: Core battery estimation engine
-- [ ] Stream C: Progressive disclosure UI
+- [x] Stream C: Progressive disclosure UI
 - [ ] Stream D: Safety overlay + viewport integration
 - [ ] Stream E: Recommendations + advanced safety
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Battery Estimation Spec
