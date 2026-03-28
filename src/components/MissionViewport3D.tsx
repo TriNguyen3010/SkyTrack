@@ -1117,7 +1117,13 @@ function MissionWorld({
               )
             }
             transparent
-            opacity={selectedWaypointId === waypoint.id ? 0.9 : 0.32}
+            opacity={
+              selectedWaypointId === waypoint.id
+                ? 0.9
+                : waypoint.role === 'intermediate'
+                  ? 0.16
+                  : 0.32
+            }
           />
         ))}
 
@@ -1238,6 +1244,7 @@ function MissionWorld({
         revealedWaypoints.map((waypoint) => {
           const isSelected = waypoint.id === selectedWaypointId
           const isHovered = waypoint.id === hoveredWaypointId
+          const isIntermediate = waypoint.role === 'intermediate'
           const actionCount = waypoint.actions.length
           const isStartWaypoint = waypoint.id === startWaypointId
           const isEndWaypoint = waypoint.id === endWaypointId
@@ -1246,6 +1253,26 @@ function MissionWorld({
             batteryEstimate?.safetyLevel ?? 'safe',
           )
           const isPointOfNoReturn = waypoint.id === pointOfNoReturnId
+          const shouldShowPersistentLabel =
+            !isIntermediate ||
+            isSelected ||
+            isHovered ||
+            actionCount > 0 ||
+            isPointOfNoReturn
+          const outerRadius = isIntermediate
+            ? isSelected
+              ? 2.15
+              : 1.85
+            : isSelected
+              ? 2.7
+              : 2.3
+          const innerRadius = isIntermediate
+            ? isSelected
+              ? 1.18
+              : 1.02
+            : isSelected
+              ? 1.6
+              : 1.4
 
           return (
             <group
@@ -1300,11 +1327,13 @@ function MissionWorld({
 
               {isHovered && !isSelected && (
                 <mesh rotation-x={-Math.PI / 2} position={[0, 0.24, 0]}>
-                  <ringGeometry args={[3.6, 4.4, 36]} />
+                  <ringGeometry
+                    args={isIntermediate ? [2.8, 3.45, 36] : [3.6, 4.4, 36]}
+                  />
                   <meshBasicMaterial
                     color={waypointSafetyColor}
                     transparent
-                    opacity={0.32}
+                    opacity={isIntermediate ? 0.22 : 0.32}
                   />
                 </mesh>
               )}
@@ -1334,33 +1363,45 @@ function MissionWorld({
               )}
 
               <mesh>
-                <sphereGeometry args={[isSelected ? 2.7 : 2.3, 28, 28]} />
-                <meshStandardMaterial color="#ffffff" />
+                <sphereGeometry args={[outerRadius, 28, 28]} />
+                <meshStandardMaterial
+                  color="#ffffff"
+                  transparent
+                  opacity={isIntermediate ? 0.82 : 1}
+                />
               </mesh>
               <mesh position={[0, 0.12, 0]}>
-                <sphereGeometry args={[isSelected ? 1.6 : 1.4, 22, 22]} />
+                <sphereGeometry args={[innerRadius, 22, 22]} />
                 <meshStandardMaterial
                   color={waypointSafetyColor}
                   emissive={waypointSafetyColor}
                   emissiveIntensity={isSelected ? 0.32 : isHovered ? 0.3 : 0.22}
+                  transparent
+                  opacity={isIntermediate ? 0.84 : 1}
                 />
               </mesh>
 
-              <Billboard position={[0, 8.6, 0]} follow>
-                <mesh>
-                  <circleGeometry args={[4.2, 36]} />
-                  <meshBasicMaterial color={waypointSafetyColor} />
-                </mesh>
-                <Text
-                  position={[0, 0, 0.05]}
-                  fontSize={3.2}
-                  color="#ffffff"
-                  anchorX="center"
-                  anchorY="middle"
-                >
-                  {waypoint.id}
-                </Text>
-              </Billboard>
+              {shouldShowPersistentLabel && (
+                <Billboard position={[0, isIntermediate ? 7.2 : 8.6, 0]} follow>
+                  <mesh>
+                    <circleGeometry args={[isIntermediate ? 3.25 : 4.2, 36]} />
+                    <meshBasicMaterial
+                      color={waypointSafetyColor}
+                      transparent
+                      opacity={isIntermediate ? 0.78 : 1}
+                    />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={isIntermediate ? 2.35 : 3.2}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    {waypoint.id}
+                  </Text>
+                </Billboard>
+              )}
 
               {(isHovered || isSelected) && batteryEstimate && (
                 <Billboard position={[0, 23, 0]} follow>
@@ -1419,14 +1460,17 @@ function MissionWorld({
               )}
 
               {actionCount > 0 && (
-                <Billboard position={[5.5, 4.8, 0]} follow>
+                <Billboard
+                  position={[isIntermediate ? 4.3 : 5.5, isIntermediate ? 4.2 : 4.8, 0]}
+                  follow
+                >
                   <mesh>
-                    <planeGeometry args={[7.6, 4.2]} />
+                    <planeGeometry args={isIntermediate ? [6.6, 3.8] : [7.6, 4.2]} />
                     <meshBasicMaterial color="#f97316" transparent opacity={0.98} />
                   </mesh>
                   <Text
                     position={[0, 0, 0.05]}
-                    fontSize={2.2}
+                    fontSize={isIntermediate ? 1.95 : 2.2}
                     color="#ffffff"
                     anchorX="center"
                     anchorY="middle"

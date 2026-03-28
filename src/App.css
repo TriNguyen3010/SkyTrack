@@ -1957,6 +1957,11 @@
   background: linear-gradient(180deg, rgba(236, 253, 245, 0.84) 0%, #ffffff 100%);
 }
 
+.waypoint-row.is-intermediate {
+  border-style: dashed;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, #ffffff 100%);
+}
+
 .waypoint-row-top {
   display: flex;
   align-items: center;
@@ -2024,6 +2029,23 @@
   color: #c2410c;
   font-size: 11px;
   font-weight: 700;
+}
+
+.waypoint-role-pill {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.waypoint-role-pill.is-anchor {
+  background: rgba(100, 116, 139, 0.12);
+  color: #475569;
+}
+
+.waypoint-role-pill.is-intermediate {
+  background: rgba(148, 163, 184, 0.16);
+  color: #64748b;
 }
 
 .waypoint-status-pill {

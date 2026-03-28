@@ -101,6 +101,7 @@ interface MissionState {
   toggleExclusionZone: (zoneId: number) => void
   setActiveExclusionZone: (zoneId: number | null) => void
   setDrawingTarget: (target: DrawingTarget) => void
+  setWaypointDensityConfig: (config: WaypointDensityConfig) => void
   setWaypointDensityMode: (mode: WaypointDensityConfig['mode']) => void
   setTargetWaypointCount: (count: number) => void
   setTargetWaypointSpacing: (spacing: number) => void
@@ -324,6 +325,12 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       activeExclusionZoneId:
         target === 'boundary' ? null : state.activeExclusionZoneId,
     })),
+  setWaypointDensityConfig: (config) =>
+    set({
+      waypointDensity: {
+        ...config,
+      },
+    }),
   setWaypointDensityMode: (mode) =>
     set((state) => ({
       waypointDensity: {

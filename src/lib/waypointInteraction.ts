@@ -97,19 +97,24 @@ export function getAllowedStartWaypointIds(
   waypoints: MissionWaypoint[],
   isClosedLoopOverride?: boolean,
 ): number[] {
-  if (waypoints.length === 0) {
+  const anchorWaypoints = waypoints.filter((waypoint) => waypoint.role === 'anchor')
+
+  if (anchorWaypoints.length === 0) {
     return []
   }
 
-  if (waypoints.length === 1) {
-    return [waypoints[0].id]
+  if (anchorWaypoints.length === 1) {
+    return [anchorWaypoints[0].id]
   }
 
   if (resolveClosedLoopState(patternId, isClosedLoopOverride)) {
-    return waypoints.map((waypoint) => waypoint.id)
+    return anchorWaypoints.map((waypoint) => waypoint.id)
   }
 
-  return [waypoints[0].id, waypoints[waypoints.length - 1].id]
+  return [
+    anchorWaypoints[0].id,
+    anchorWaypoints[anchorWaypoints.length - 1].id,
+  ]
 }
 
 export function canSetStartWaypoint(
@@ -182,6 +187,13 @@ export function getWaypointValidationWarnings({
   missionEndWaypointId?: number | null
 }): string[] {
   const warnings: string[] = []
+
+  if (waypoint.role === 'intermediate') {
+    warnings.push(
+      'Intermediate waypoint actions may be cleared when waypoint density changes.',
+    )
+  }
+
   const totalActionDuration = waypoint.actions.reduce((total, action) => {
     if (
       action.type === 'hover' ||

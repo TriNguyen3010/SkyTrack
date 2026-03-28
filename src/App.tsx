@@ -108,6 +108,10 @@ import type {
 import {
   computeWaypointDensityMetrics,
 } from './lib/waypointDensity'
+import {
+  countIntermediateWaypointActions,
+  migrateAnchorActionsToDensityMission,
+} from './lib/waypointDensityMigration'
 import './App.css'
 
 const toolbarItems = [
@@ -174,6 +178,9 @@ function App() {
   const setWaypointDensityMode = useMissionStore((state) => state.setWaypointDensityMode)
   const setTargetWaypointCount = useMissionStore((state) => state.setTargetWaypointCount)
   const setTargetWaypointSpacing = useMissionStore((state) => state.setTargetWaypointSpacing)
+  const setWaypointDensityConfig = useMissionStore(
+    (state) => state.setWaypointDensityConfig,
+  )
   const addExclusionZone = useMissionStore((state) => state.addExclusionZone)
   const removeExclusionZone = useMissionStore((state) => state.removeExclusionZone)
   const renameExclusionZone = useMissionStore((state) => state.renameExclusionZone)
@@ -494,6 +501,10 @@ function App() {
       ]
     },
     [effectiveStartWaypointId, missionEndWaypointId, selectedWaypoint],
+  )
+  const intermediateWaypointActionCount = useMemo(
+    () => countIntermediateWaypointActions(waypoints),
+    [waypoints],
   )
   const activeNotice =
     interactionNotice && stage !== 'idle' ? interactionNotice : null
@@ -883,6 +894,7 @@ function App() {
     if (
       stage !== 'generated' ||
       !selectedPatternMission ||
+      !generatedWaypointDensity ||
       generatedDensitySignature === null ||
       generatedDensitySignature === densitySignature
     ) {
@@ -900,8 +912,42 @@ function App() {
         return
       }
 
+      if (intermediateWaypointActionCount > 0) {
+        const confirmed = window.confirm(
+          `Changing waypoint density will remove ${intermediateWaypointActionCount} action${
+            intermediateWaypointActionCount > 1 ? 's' : ''
+          } assigned to intermediate waypoints. Anchor actions will be preserved. Continue?`,
+        )
+
+        if (!confirmed) {
+          setWaypointDensityConfig(generatedWaypointDensity)
+          setInteractionNotice({
+            tone: 'warning',
+            message:
+              'Waypoint density change was cancelled so intermediate waypoint actions are preserved.',
+          })
+          return
+        }
+      }
+
+      const migratedMission = migrateAnchorActionsToDensityMission(
+        waypoints,
+        selectedPatternMission,
+      )
+
+      generateMissionPath(migratedMission, waypointDensity)
+
+      if (intermediateWaypointActionCount > 0) {
+        setInteractionNotice({
+          tone: 'warning',
+          message: `${intermediateWaypointActionCount} intermediate waypoint action${
+            intermediateWaypointActionCount > 1 ? 's were' : ' was'
+          } cleared during density update. Anchor actions were preserved.`,
+        })
+        return
+      }
+
       clearInteractionNotice()
-      generateMissionPath(selectedPatternMission, waypointDensity)
     }, 150)
 
     return () => {
@@ -912,9 +958,13 @@ function App() {
     editGeneratedPath,
     generateMissionPath,
     generatedDensitySignature,
+    generatedWaypointDensity,
+    intermediateWaypointActionCount,
+    setWaypointDensityConfig,
     selectedPatternMission,
     stage,
     waypointDensity,
+    waypoints,
   ])
 
   function updatePatternParams<K extends FlightPatternId>(
@@ -2227,7 +2277,8 @@ function App() {
                   )}
                   {selectedWaypoint && (
                     <div className="selected-waypoint-summary">
-                      Selected WP {selectedWaypoint.id} · X{' '}
+                      Selected WP {selectedWaypoint.id} ·{' '}
+                      {selectedWaypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'} · X{' '}
                       {formatWaypointCoordinate(selectedWaypoint.x)} · Y{' '}
                       {formatWaypointCoordinate(selectedWaypoint.y)} · Z{' '}
                       {formatWaypointCoordinate(selectedWaypoint.z)}m ·{' '}
@@ -2650,7 +2701,7 @@ function WaypointBehaviorRow({
       type="button"
       className={`waypoint-row ${isSelected ? 'is-selected' : ''} ${
         isHovered ? 'is-hovered' : ''
-      } ${
+      } ${waypoint.role === 'intermediate' ? 'is-intermediate' : ''} ${
         isStartNode ? 'is-start' : ''
       }`}
       onMouseEnter={() => onHoverChange(waypoint.id)}
@@ -2663,6 +2714,13 @@ function WaypointBehaviorRow({
           <strong>Navigate to waypoint</strong>
           <div className="waypoint-row-meta">
             <span>{isSelected ? 'Selected in viewport' : 'Waypoint target'}</span>
+            <span
+              className={`waypoint-role-pill ${
+                waypoint.role === 'anchor' ? 'is-anchor' : 'is-intermediate'
+              }`}
+            >
+              {waypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'}
+            </span>
             {isStartNode && (
               <span className="waypoint-status-pill is-start">
                 {isClosedLoop ? 'Start / Return' : 'Start Node'}
@@ -2802,6 +2860,7 @@ function WaypointActionEditor({
           <span>Assign mission behaviors to this node.</span>
         </div>
         <div className="action-editor-count">
+          {waypoint.role === 'anchor' ? 'Anchor' : 'Intermediate'} ·{' '}
           {waypoint.actions.length} action{waypoint.actions.length !== 1 ? 's' : ''}
         </div>
       </div>
