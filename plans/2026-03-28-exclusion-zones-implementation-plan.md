@@ -262,7 +262,7 @@ Status: implemented, build/lint/test passed. Shared exclusion clipping and valid
 
 ### Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
 
-Status: pending.
+Status: implemented, build/lint/test passed. Editing/generated sidebar now exposes `Excluded Areas`, drawing can switch to `drawingTarget = exclusion`, and the viewport renders exclusion fills, dashed outlines, labels, and selection states through [App.tsx](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/App.tsx), [MissionViewport3D.tsx](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/components/MissionViewport3D.tsx), and [App.css](/Users/nguyenminhtri/.gemini/antigravity/scratch/SkyTrack/src/App.css).
 
 #### Scope
 
@@ -381,7 +381,7 @@ Lý do:
 
 - [x] Stream A: Data Model + Store Foundation
 - [x] Stream B: Geometry + Validation Core
-- [ ] Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
+- [x] Stream C: Drawing Flow + Sidebar CRUD + Viewport Rendering
 - [ ] Stream D: Phase A Pattern Integration
 - [ ] Stream E: Full Pattern Support + Polish v1
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Exclusion Zones Spec

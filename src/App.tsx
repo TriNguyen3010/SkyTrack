@@ -75,6 +75,7 @@ import {
 } from './lib/missionGeometry'
 import {
   useMissionStore,
+  type ExclusionZone,
   type MissionPoint,
   type MissionWaypoint,
 } from './store/useMissionStore'
@@ -93,6 +94,10 @@ import {
   getWaypointValidationWarnings,
   isBulkAssignActive,
 } from './lib/waypointInteraction'
+import {
+  getEnabledExclusionZones,
+  getExclusionZoneValidationIssues,
+} from './lib/exclusionValidation'
 import type {
   DroneProfile,
   WaypointBatteryEstimate,
@@ -133,6 +138,9 @@ function App() {
   const homePoint = useMissionStore((state) => state.homePoint)
   const safetyPresetId = useMissionStore((state) => state.safetyPresetId)
   const points = useMissionStore((state) => state.points)
+  const exclusionZones = useMissionStore((state) => state.exclusionZones)
+  const activeExclusionZoneId = useMissionStore((state) => state.activeExclusionZoneId)
+  const drawingTarget = useMissionStore((state) => state.drawingTarget)
   const waypoints = useMissionStore((state) => state.waypoints)
   const selectedWaypointId = useMissionStore((state) => state.selectedWaypointId)
   const startWaypointId = useMissionStore((state) => state.startWaypointId)
@@ -145,6 +153,11 @@ function App() {
   const setOrientation = useMissionStore((state) => state.setOrientation)
   const setDroneProfileId = useMissionStore((state) => state.setDroneProfileId)
   const setSafetyPresetId = useMissionStore((state) => state.setSafetyPresetId)
+  const addExclusionZone = useMissionStore((state) => state.addExclusionZone)
+  const removeExclusionZone = useMissionStore((state) => state.removeExclusionZone)
+  const renameExclusionZone = useMissionStore((state) => state.renameExclusionZone)
+  const toggleExclusionZone = useMissionStore((state) => state.toggleExclusionZone)
+  const setActiveExclusionZone = useMissionStore((state) => state.setActiveExclusionZone)
   const enterSetup = useMissionStore((state) => state.enterSetup)
   const cancelSetup = useMissionStore((state) => state.cancelSetup)
   const startDrawing = useMissionStore((state) => state.startDrawing)
@@ -231,9 +244,30 @@ function App() {
       hoveredPattern ? getFlightPatternDefinition(hoveredPattern) : null,
     [hoveredPattern],
   )
+  const activeExclusionZone = useMemo(
+    () =>
+      activeExclusionZoneId === null
+        ? null
+        : exclusionZones.find((zone) => zone.id === activeExclusionZoneId) ?? null,
+    [activeExclusionZoneId, exclusionZones],
+  )
+  const activeDrawingPoints = useMemo(
+    () =>
+      drawingTarget === 'exclusion' ? activeExclusionZone?.points ?? [] : points,
+    [activeExclusionZone, drawingTarget, points],
+  )
+  const enabledExclusionZones = useMemo(
+    () => getEnabledExclusionZones(exclusionZones),
+    [exclusionZones],
+  )
   const isPolygonValid = useMemo(
     () => points.length >= 3 && isSimplePolygon(points),
     [points],
+  )
+  const isActiveDrawingPolygonValid = useMemo(
+    () =>
+      activeDrawingPoints.length >= 3 && isSimplePolygon(activeDrawingPoints),
+    [activeDrawingPoints],
   )
   const activePreviewPattern = hoveredPattern ?? selectedPattern
   const activePatternParams = patternParamsByPattern[selectedPattern]
@@ -246,9 +280,10 @@ function App() {
   const patternGenerationContext = useMemo(
     () => ({
       points,
+      exclusionZones: enabledExclusionZones,
       paramsByPattern: patternParamsByPattern,
     }),
-    [patternParamsByPattern, points],
+    [enabledExclusionZones, patternParamsByPattern, points],
   )
   const activePreviewMission = useMemo(
     () =>
@@ -304,6 +339,18 @@ function App() {
     ? displayStartWaypointId
     : missionEndWaypointId
   const area = useMemo(() => polygonArea(points), [points])
+  const activeExclusionIssues = useMemo(
+    () =>
+      activeExclusionZone
+        ? getExclusionZoneValidationIssues({
+            zone: activeExclusionZone,
+            boundaryPoints: points,
+            otherZones: exclusionZones.filter((zone) => zone.id !== activeExclusionZone.id),
+            lineSpacing,
+          })
+        : [],
+    [activeExclusionZone, exclusionZones, lineSpacing, points],
+  )
   const selectedWaypoint = useMemo(
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
     [selectedWaypointId, waypoints],
@@ -407,6 +454,10 @@ function App() {
   const bulkAssignActionLabel = bulkAssignActionType
     ? getWaypointActionLabel(bulkAssignActionType)
     : null
+  const drawingModeLabel =
+    drawingTarget === 'exclusion'
+      ? activeExclusionZone?.label ?? 'Excluded area'
+      : selectedPatternOption.shortLabel
   const canRadialWaypointBeStart = useMemo(
     () =>
       radialMenuWaypoint
@@ -727,6 +778,24 @@ function App() {
   }, [viewportAnimationState])
 
   useEffect(() => {
+    if (stage !== 'generated' || !selectedPatternMission) {
+      return undefined
+    }
+
+    if (areWaypointRoutesEquivalent(waypoints, selectedPatternMission.waypoints)) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      generateMissionPath(selectedPatternMission.waypoints)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [generateMissionPath, selectedPatternMission, stage, waypoints])
+
+  useEffect(() => {
     if (scanAltitude !== activePatternParams.scanAltitude) {
       setScanAltitude(activePatternParams.scanAltitude)
     }
@@ -802,10 +871,13 @@ function App() {
   }
 
   function handleAddPoint(x: number, y: number) {
-    if (!canAppendPointToOpenPath(points, { x, y })) {
+    if (!canAppendPointToOpenPath(activeDrawingPoints, { x, y })) {
       setInteractionNotice({
         tone: 'danger',
-        message: 'Path cannot cross itself. Place the next point along the outer boundary.',
+        message:
+          drawingTarget === 'exclusion'
+            ? 'Excluded area cannot cross itself. Keep the shape simple and non-overlapping.'
+            : 'Path cannot cross itself. Place the next point along the outer boundary.',
       })
       return
     }
@@ -815,12 +887,17 @@ function App() {
   }
 
   function handleUpdatePoint(id: number, x: number, y: number) {
-    const candidate = points.map((point) => (point.id === id ? { ...point, x, y } : point))
+    const candidate = activeDrawingPoints.map((point) =>
+      point.id === id ? { ...point, x, y } : point,
+    )
 
     if (!isSimplePolygon(candidate)) {
       setInteractionNotice({
         tone: 'danger',
-        message: 'Polygon fill needs a simple boundary. This move would create crossing edges.',
+        message:
+          drawingTarget === 'exclusion'
+            ? 'Excluded area must stay a simple polygon. This move would create crossing edges.'
+            : 'Polygon fill needs a simple boundary. This move would create crossing edges.',
       })
       return
     }
@@ -830,16 +907,28 @@ function App() {
   }
 
   function handleClosePolygon() {
-    if (!isPolygonValid) {
+    if (!isActiveDrawingPolygonValid) {
       setInteractionNotice({
         tone: 'danger',
-        message: 'Close the area with a non-crossing boundary before continuing.',
+        message:
+          drawingTarget === 'exclusion'
+            ? 'Close the excluded area with a non-crossing boundary before continuing.'
+            : 'Close the area with a non-crossing boundary before continuing.',
       })
       return
     }
 
+    const closingExclusionZoneId =
+      drawingTarget === 'exclusion' ? activeExclusionZoneId : null
+
     clearInteractionNotice()
     closePolygon()
+
+    if (closingExclusionZoneId !== null) {
+      setActiveExclusionZone(closingExclusionZoneId)
+      return
+    }
+
     schedulePatternPickerOpen()
   }
 
@@ -878,7 +967,29 @@ function App() {
     dismissPatternPicker()
     dismissWaypointRadialMenu()
     clearInteractionNotice()
+    setActiveExclusionZone(null)
     redrawMission()
+  }
+
+  function handleAddExclusionZone() {
+    dismissPatternPicker()
+    dismissWaypointRadialMenu()
+    clearInteractionNotice()
+    addExclusionZone()
+  }
+
+  function handleDeleteExclusionZone(zone: ExclusionZone) {
+    if (!window.confirm(`Delete "${zone.label}"?`)) {
+      return
+    }
+
+    clearInteractionNotice()
+    removeExclusionZone(zone.id)
+  }
+
+  function handleToggleExclusionZone(zoneId: number) {
+    clearInteractionNotice()
+    toggleExclusionZone(zoneId)
   }
 
   function handleSelectPattern(patternId: FlightPatternId) {
@@ -1010,9 +1121,13 @@ function App() {
       : stage === 'setup'
       ? 'Tap highlighted altitude plane to place first point'
       : stage === 'drawing'
-        ? stage === 'drawing' && isReadyToClose
-          ? 'Click to close polygon'
-          : 'Click first point to close polygon'
+        ? drawingTarget === 'exclusion'
+          ? isReadyToClose
+            ? 'Click to close excluded area'
+            : 'Click first point to close excluded area'
+          : stage === 'drawing' && isReadyToClose
+            ? 'Click to close polygon'
+            : 'Click first point to close polygon'
       : stage === 'editing'
           ? patternPickerVisible
             ? hoveredPatternOption
@@ -1082,7 +1197,11 @@ function App() {
             ref={viewportStageRef}
             className={`viewport-stage ${
               stage === 'setup' || stage === 'drawing' ? 'is-drawing' : ''
-            } ${stage === 'drawing' && isReadyToClose ? 'is-ready-to-close' : ''}`}
+            } ${stage === 'drawing' && isReadyToClose ? 'is-ready-to-close' : ''} ${
+              stage === 'drawing' && drawingTarget === 'exclusion'
+                ? 'is-exclusion-drawing'
+                : ''
+            }`}
             onContextMenu={(event) => {
               if (isBulkAssignActive(bulkAssignActionType)) {
                 event.preventDefault()
@@ -1106,6 +1225,10 @@ function App() {
               stage={stage}
               scanAltitude={scanAltitude}
               points={points}
+              exclusionZones={exclusionZones}
+              activeExclusionZoneId={activeExclusionZoneId}
+              drawingTarget={drawingTarget}
+              drawingPoints={activeDrawingPoints}
               patternSegments={patternSegments}
               waypoints={orderedWaypoints}
               batteryReport={generatedBatteryReport}
@@ -1129,6 +1252,7 @@ function App() {
               onAnimationStateChange={setViewportAnimationState}
               onHoveredWaypointChange={setHoveredWaypoint}
               onWaypointContextMenu={handleWaypointContextMenu}
+              onSelectExclusionZone={setActiveExclusionZone}
             />
 
             {viewportAnimationState === 'animating' && (
@@ -1409,20 +1533,28 @@ function App() {
               <div className="drawing-panel">
                 <div className="setup-mode">
                   <span className="setup-dot" />
-                  <span>Drawing {selectedPatternOption.shortLabel}</span>
+                  <span>
+                    {drawingTarget === 'exclusion'
+                      ? `Drawing ${drawingModeLabel}`
+                      : `Drawing ${selectedPatternOption.shortLabel}`}
+                  </span>
                 </div>
 
                 <div className="stat-strip">
                   <div className="stat-pill">Alt {scanAltitude}m</div>
-                  <div className="stat-pill">Pts {points.length}</div>
+                  <div className="stat-pill">Pts {activeDrawingPoints.length}</div>
                 </div>
 
                 <div className="hint-card">
                   <span className="hint-icon">✦</span>
                   {activeNotice?.message ??
-                    (isReadyToClose
-                      ? 'Click để đóng vùng'
-                      : 'Click first point to close polygon')}
+                    (drawingTarget === 'exclusion'
+                      ? isReadyToClose
+                        ? 'Click để đóng vùng loại trừ'
+                        : 'Click first point to close excluded area'
+                      : isReadyToClose
+                        ? 'Click để đóng vùng'
+                        : 'Click first point to close polygon')}
                 </div>
 
                 <button
@@ -1491,16 +1623,28 @@ function App() {
 
                 <div className="vertices-card">
                   <div className="vertices-header">
-                    <span>Vertices</span>
+                    <span>{drawingTarget === 'exclusion' ? 'Zone vertices' : 'Vertices'}</span>
                     <small>drag in 3D to move</small>
                   </div>
 
                   <div className="vertices-list">
-                    {points.map((point) => (
+                    {activeDrawingPoints.map((point) => (
                       <VertexRow key={point.id} point={point} />
                     ))}
                   </div>
                 </div>
+
+                <ExclusionZoneSection
+                  zones={exclusionZones}
+                  activeZoneId={activeExclusionZoneId}
+                  activeIssues={activeExclusionIssues}
+                  stage={stage}
+                  onAddZone={handleAddExclusionZone}
+                  onSelectZone={setActiveExclusionZone}
+                  onRenameZone={renameExclusionZone}
+                  onToggleZone={handleToggleExclusionZone}
+                  onDeleteZone={handleDeleteExclusionZone}
+                />
 
                 <SliderField
                   id="phase2-altitude"
@@ -1962,6 +2106,18 @@ function App() {
                     }
                   />
                 )}
+
+                <ExclusionZoneSection
+                  zones={exclusionZones}
+                  activeZoneId={activeExclusionZoneId}
+                  activeIssues={activeExclusionIssues}
+                  stage={stage}
+                  onAddZone={handleAddExclusionZone}
+                  onSelectZone={setActiveExclusionZone}
+                  onRenameZone={renameExclusionZone}
+                  onToggleZone={handleToggleExclusionZone}
+                  onDeleteZone={handleDeleteExclusionZone}
+                />
               </div>
             )}
           </section>
@@ -2060,6 +2216,122 @@ function App() {
         </aside>
       </section>
     </main>
+  )
+}
+
+function ExclusionZoneSection({
+  zones,
+  activeZoneId,
+  activeIssues,
+  stage,
+  onAddZone,
+  onSelectZone,
+  onRenameZone,
+  onToggleZone,
+  onDeleteZone,
+}: {
+  zones: ExclusionZone[]
+  activeZoneId: number | null
+  activeIssues: Array<{
+    code: string
+    level: 'warning' | 'error'
+    message: string
+    relatedZoneId?: number
+  }>
+  stage: 'drawing' | 'editing' | 'generated'
+  onAddZone: () => void
+  onSelectZone: (zoneId: number | null) => void
+  onRenameZone: (zoneId: number, label: string) => void
+  onToggleZone: (zoneId: number) => void
+  onDeleteZone: (zone: ExclusionZone) => void
+}) {
+  return (
+    <div className="exclusion-section">
+      <div className="exclusion-section-header">
+        <div className="setup-mode">
+          <PencilLine size={16} strokeWidth={2.1} />
+          <span>Excluded Areas</span>
+        </div>
+        <button
+          type="button"
+          className="link-button"
+          onClick={onAddZone}
+        >
+          <Plus size={14} strokeWidth={2.2} />
+          Add
+        </button>
+      </div>
+
+      {zones.length === 0 ? (
+        <div className="exclusion-empty-state">
+          Mark areas to skip after the main boundary is ready.
+        </div>
+      ) : (
+        <div className="exclusion-zone-list">
+          {zones.map((zone) => (
+            <div
+              key={zone.id}
+              className={`exclusion-zone-row ${
+                activeZoneId === zone.id ? 'is-active' : ''
+              } ${!zone.enabled ? 'is-disabled' : ''}`}
+            >
+              <button
+                type="button"
+                className="exclusion-zone-toggle"
+                aria-pressed={zone.enabled}
+                onClick={() => onToggleZone(zone.id)}
+                disabled={stage === 'drawing'}
+              >
+                {zone.enabled ? '☑' : '☐'}
+              </button>
+
+              <div className="exclusion-zone-main">
+                <button
+                  type="button"
+                  className="exclusion-zone-select"
+                  onClick={() => onSelectZone(zone.id)}
+                >
+                  <span className="exclusion-zone-badge">{zone.id}</span>
+                </button>
+                <input
+                  className="exclusion-zone-input"
+                  type="text"
+                  value={zone.label}
+                  onFocus={() => onSelectZone(zone.id)}
+                  onChange={(event) => onRenameZone(zone.id, event.target.value)}
+                />
+              </div>
+
+              <button
+                type="button"
+                className="doc-button exclusion-zone-delete"
+                aria-label={`Delete ${zone.label}`}
+                onClick={() => onDeleteZone(zone)}
+                disabled={stage === 'drawing'}
+              >
+                <Trash2 size={14} strokeWidth={2.1} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeIssues.length > 0 && (
+        <div className="exclusion-issues">
+          {activeIssues.map((issue, index) => (
+            <div
+              key={`${issue.code}-${issue.relatedZoneId ?? 'self'}-${index}`}
+              className={`validation-card ${
+                issue.level === 'warning' ? 'is-warning' : ''
+              }`}
+            >
+              <span className="validation-card-dot" />
+              <span>{issue.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -3335,6 +3607,26 @@ function renderWaypointActionIcon(type: MissionWaypointActionType) {
     case 'trigger_sensor':
       return <Radar size={15} strokeWidth={2.1} />
   }
+}
+
+function areWaypointRoutesEquivalent(
+  current: MissionWaypoint[],
+  next: MissionWaypoint[],
+): boolean {
+  if (current.length !== next.length) {
+    return false
+  }
+
+  return current.every((waypoint, index) => {
+    const candidate = next[index]
+
+    return (
+      candidate !== undefined &&
+      Math.abs(waypoint.x - candidate.x) < 0.001 &&
+      Math.abs(waypoint.y - candidate.y) < 0.001 &&
+      Math.abs(waypoint.z - candidate.z) < 0.001
+    )
+  })
 }
 
 export default App

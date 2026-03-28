@@ -4,7 +4,11 @@ import {
   polygonCentroid,
   type Vec2,
 } from './missionGeometry'
-import type { MissionPoint, MissionWaypoint } from '../store/useMissionStore'
+import type {
+  ExclusionZone,
+  MissionPoint,
+  MissionWaypoint,
+} from '../store/useMissionStore'
 
 type XYPoint = Pick<MissionPoint, 'x' | 'y'>
 
@@ -97,6 +101,7 @@ export interface FlightPatternMissionResult {
 
 export interface FlightPatternBuildContext {
   points: MissionPoint[]
+  exclusionZones: ExclusionZone[]
   paramsByPattern: PatternParamsMap
 }
 

@@ -27,6 +27,8 @@ import type {
   WaypointBatteryEstimate,
 } from '../lib/batteryModels'
 import type {
+  DrawingTarget,
+  ExclusionZone,
   MissionPoint,
   MissionStage,
   MissionWaypoint,
@@ -84,6 +86,10 @@ interface MissionViewport3DProps {
   stage: MissionStage
   scanAltitude: number
   points: MissionPoint[]
+  exclusionZones: ExclusionZone[]
+  activeExclusionZoneId: number | null
+  drawingTarget: DrawingTarget
+  drawingPoints: MissionPoint[]
   patternSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
   batteryReport?: MissionBatteryReport | null
@@ -104,6 +110,7 @@ interface MissionViewport3DProps {
   onExitBulkAssign?: () => void
   onHoveredWaypointChange?: (id: number | null) => void
   onWaypointContextMenu?: (request: WaypointContextMenuRequest) => void
+  onSelectExclusionZone?: (id: number | null) => void
   onReadyToCloseChange?: (ready: boolean) => void
   onPatternPickerAnchorChange?: (anchor: Vec2 | null) => void
   onAnimationStateChange?: (state: ViewportAnimationState) => void
@@ -113,6 +120,10 @@ export function MissionViewport3D({
   stage,
   scanAltitude,
   points,
+  exclusionZones,
+  activeExclusionZoneId,
+  drawingTarget,
+  drawingPoints,
   patternSegments,
   waypoints,
   batteryReport = null,
@@ -133,6 +144,7 @@ export function MissionViewport3D({
   onExitBulkAssign,
   onHoveredWaypointChange,
   onWaypointContextMenu,
+  onSelectExclusionZone,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onAnimationStateChange,
@@ -161,6 +173,10 @@ export function MissionViewport3D({
   )
 
   const cameraTarget = useMemo(() => {
+    if (drawingTarget === 'exclusion' && drawingPoints.length > 0) {
+      return polygonCentroid(drawingPoints)
+    }
+
     if (points.length > 0) {
       return polygonCentroid(points)
     }
@@ -170,7 +186,7 @@ export function MissionViewport3D({
     }
 
     return WORLD_CENTER
-  }, [points, waypoints])
+  }, [drawingPoints, drawingTarget, points, waypoints])
 
   useEffect(() => {
     if (skipAnimationToken === previousSkipTokenRef.current) {
@@ -211,6 +227,10 @@ export function MissionViewport3D({
           stage={stage}
           scanAltitude={scanAltitude}
           points={points}
+          exclusionZones={exclusionZones}
+          activeExclusionZoneId={activeExclusionZoneId}
+          drawingTarget={drawingTarget}
+          drawingPoints={drawingPoints}
           patternSegments={patternSegments}
           waypoints={waypoints}
           batteryReport={batteryReport}
@@ -234,6 +254,7 @@ export function MissionViewport3D({
           onExitBulkAssign={onExitBulkAssign}
           onHoveredWaypointChange={onHoveredWaypointChange}
           onWaypointContextMenu={onWaypointContextMenu}
+          onSelectExclusionZone={onSelectExclusionZone}
           onReadyToCloseChange={onReadyToCloseChange}
           onPatternPickerAnchorChange={onPatternPickerAnchorChange}
           onHoverPointChange={setHoverPoint}
@@ -271,7 +292,7 @@ export function MissionViewport3D({
       <DrawingCameraController
         stage={stage}
         scanAltitude={scanAltitude}
-        points={points}
+        points={drawingTarget === 'exclusion' ? drawingPoints : points}
         cameraTarget={cameraTarget}
         draggingPointId={draggingPointId}
         patternPickerVisible={patternPickerVisible}
@@ -308,6 +329,10 @@ function MissionWorld({
   stage,
   scanAltitude,
   points,
+  exclusionZones,
+  activeExclusionZoneId,
+  drawingTarget,
+  drawingPoints,
   patternSegments,
   waypoints,
   batteryReport = null,
@@ -331,6 +356,7 @@ function MissionWorld({
   onExitBulkAssign,
   onHoveredWaypointChange,
   onWaypointContextMenu,
+  onSelectExclusionZone,
   onReadyToCloseChange,
   onPatternPickerAnchorChange,
   onHoverPointChange,
@@ -356,6 +382,10 @@ function MissionWorld({
   const displayedPreviewSegments = useMemo(
     () => getDisplayedPreviewSegments(previewTransition, patternSegments),
     [patternSegments, previewTransition],
+  )
+  const visibleExclusionZones = useMemo(
+    () => exclusionZones.filter((zone) => zone.points.length >= 3),
+    [exclusionZones],
   )
   const previewSegmentColor = previewTransition
     ? getFlightPatternOption(
@@ -618,18 +648,18 @@ function MissionWorld({
     }
   }, [camera, draggingPointId, gl, onDraggingPointChange, onUpdatePoint, scanAltitude])
 
-  const canClosePolygon = stage === 'drawing' && points.length >= 3
+  const canClosePolygon = stage === 'drawing' && drawingPoints.length >= 3
   const isPlaneInteractive = stage === 'setup' || stage === 'drawing'
   const previewPolylinePoints = useMemo(() => {
-    if (points.length === 0) {
+    if (drawingPoints.length === 0) {
       return [] as ScenePoint[]
     }
 
-    const polyline = points.map((point) =>
+    const polyline = drawingPoints.map((point) =>
       toAltitudePlanePosition(point, scanAltitude, ALTITUDE_LINE_OFFSET),
     )
 
-    const snappedPreviewPoint = isReadyToClose ? points[0] : hoverPoint
+    const snappedPreviewPoint = isReadyToClose ? drawingPoints[0] : hoverPoint
 
     if (isPlaneInteractive && snappedPreviewPoint) {
       return [
@@ -642,41 +672,39 @@ function MissionWorld({
       ]
     }
 
-    if (stage !== 'drawing' && points.length >= 3) {
+    if (stage !== 'drawing' && drawingPoints.length >= 3) {
       return [
         ...polyline,
-        toAltitudePlanePosition(points[0], scanAltitude, ALTITUDE_LINE_OFFSET),
+        toAltitudePlanePosition(drawingPoints[0], scanAltitude, ALTITUDE_LINE_OFFSET),
       ]
     }
 
     return polyline
-  }, [hoverPoint, isPlaneInteractive, isReadyToClose, points, scanAltitude, stage])
+  }, [drawingPoints, hoverPoint, isPlaneInteractive, isReadyToClose, scanAltitude, stage])
   const hoverLinkPoints = useMemo(() => {
-    if (!canClosePolygon || !hoverPoint || points.length === 0 || isReadyToClose) {
+    if (!canClosePolygon || !hoverPoint || drawingPoints.length === 0 || isReadyToClose) {
       return null
     }
 
     return [
       toAltitudePlanePosition(hoverPoint, scanAltitude, ALTITUDE_LINE_OFFSET),
-      toAltitudePlanePosition(points[0], scanAltitude, ALTITUDE_LINE_OFFSET),
+      toAltitudePlanePosition(drawingPoints[0], scanAltitude, ALTITUDE_LINE_OFFSET),
     ]
-  }, [canClosePolygon, hoverPoint, isReadyToClose, points, scanAltitude])
-  const polygonShape = useMemo(() => {
+  }, [canClosePolygon, drawingPoints, hoverPoint, isReadyToClose, scanAltitude])
+  const boundaryShape = useMemo(() => {
     if (points.length < 3) {
       return null
     }
 
-    const shape = new THREE.Shape()
-    shape.moveTo(points[0].x, toShapePlaneY(points[0].y))
-
-    points.slice(1).forEach((point) => {
-      shape.lineTo(point.x, toShapePlaneY(point.y))
-    })
-
-    shape.lineTo(points[0].x, toShapePlaneY(points[0].y))
-
-    return shape
+    return buildPolygonShape(points)
   }, [points])
+  const drawingShape = useMemo(() => {
+    if (drawingPoints.length < 3) {
+      return null
+    }
+
+    return buildPolygonShape(drawingPoints)
+  }, [drawingPoints])
   const waypointBatteryEstimates = useMemo(
     () => batteryReport?.waypointEstimates ?? [],
     [batteryReport],
@@ -759,7 +787,7 @@ function MissionWorld({
     const nextHoverPoint = clampScenePoint(event.point)
     onHoverPointChange(nextHoverPoint)
 
-    if (!canClosePolygon || points.length === 0) {
+    if (!canClosePolygon || drawingPoints.length === 0) {
       setIsReadyToClose(false)
       return
     }
@@ -770,7 +798,7 @@ function MissionWorld({
         bounds: gl.domElement.getBoundingClientRect(),
         clientX: event.clientX,
         clientY: event.clientY,
-        point: points[0],
+        point: drawingPoints[0],
         altitude: scanAltitude,
       }),
     )
@@ -923,29 +951,29 @@ function MissionWorld({
           >
             <planeGeometry args={[WORLD_DIMENSIONS.width, WORLD_DIMENSIONS.height]} />
             <meshStandardMaterial
-              color="#8b5cf6"
+              color={drawingTarget === 'exclusion' ? '#f97316' : '#8b5cf6'}
               transparent
-              opacity={stage === 'setup' ? 0.14 : 0.08}
+              opacity={stage === 'setup' ? 0.14 : drawingTarget === 'exclusion' ? 0.1 : 0.08}
             />
           </mesh>
 
           <Grid
             position={[0, scanAltitude + ALTITUDE_PLANE_GRID_OFFSET, 0]}
             args={[WORLD_DIMENSIONS.width, WORLD_DIMENSIONS.height]}
-            cellColor="#7c6bff"
+            cellColor={drawingTarget === 'exclusion' ? '#fb923c' : '#7c6bff'}
             cellSize={12}
             cellThickness={0.55}
             fadeDistance={360}
             fadeStrength={1.2}
             infiniteGrid={false}
-            sectionColor="#5b21f0"
+            sectionColor={drawingTarget === 'exclusion' ? '#f97316' : '#5b21f0'}
             sectionSize={60}
             sectionThickness={1}
           />
 
           <Line
             points={getRectBorder(scanAltitude + ALTITUDE_PLANE_GRID_OFFSET)}
-            color="#6d28d9"
+            color={drawingTarget === 'exclusion' ? '#ea580c' : '#6d28d9'}
             transparent
             opacity={stage === 'setup' ? 0.7 : 0.5}
             lineWidth={1.6}
@@ -953,16 +981,52 @@ function MissionWorld({
         </>
       )}
 
-      {polygonShape && (stage !== 'drawing' || isReadyToClose) && (
+      {boundaryShape &&
+        stage !== 'idle' &&
+        (stage !== 'drawing' || drawingTarget === 'exclusion' || isReadyToClose) && (
         <mesh
           rotation-x={-Math.PI / 2}
           position={[0, scanAltitude + ALTITUDE_PLANE_FILL_OFFSET, 0]}
         >
-          <shapeGeometry args={[polygonShape]} />
+          <shapeGeometry args={[boundaryShape]} />
           <meshStandardMaterial
             color={stage === 'generated' ? selectedPatternColor : activePatternColor}
             transparent
-            opacity={stage === 'generated' ? 0.14 : isReadyToClose ? 0.12 : 0.2}
+            opacity={
+              drawingTarget === 'exclusion' && stage === 'drawing'
+                ? 0.08
+                : stage === 'generated'
+                  ? 0.14
+                  : 0.2
+            }
+          />
+        </mesh>
+      )}
+
+      {visibleExclusionZones.map((zone) => (
+        <ExclusionZoneMesh
+          key={`zone-${zone.id}`}
+          zone={zone}
+          altitude={scanAltitude}
+          isActive={activeExclusionZoneId === zone.id && drawingTarget !== 'exclusion'}
+          onSelect={
+            stage === 'editing' || stage === 'generated'
+              ? onSelectExclusionZone
+              : undefined
+          }
+        />
+      ))}
+
+      {drawingTarget === 'exclusion' && drawingShape && (
+        <mesh
+          rotation-x={-Math.PI / 2}
+          position={[0, scanAltitude + ALTITUDE_PLANE_FILL_OFFSET * 1.35, 0]}
+        >
+          <shapeGeometry args={[drawingShape]} />
+          <meshStandardMaterial
+            color="#f97316"
+            transparent
+            opacity={isReadyToClose ? 0.16 : 0.2}
           />
         </mesh>
       )}
@@ -970,7 +1034,13 @@ function MissionWorld({
       {(stage === 'drawing' || stage === 'editing') && previewPolylinePoints.length >= 2 && (
         <Line
           points={previewPolylinePoints}
-          color={stage === 'editing' ? activePatternColor : '#7c6bff'}
+          color={
+            drawingTarget === 'exclusion'
+              ? '#f97316'
+              : stage === 'editing'
+                ? activePatternColor
+                : '#7c6bff'
+          }
           lineWidth={2.2}
           dashed={stage === 'drawing'}
           dashSize={4}
@@ -981,7 +1051,7 @@ function MissionWorld({
       {hoverLinkPoints && (
         <Line
           points={hoverLinkPoints}
-          color={activePatternColor}
+          color={drawingTarget === 'exclusion' ? '#f97316' : activePatternColor}
           transparent
           opacity={0.62}
           dashed
@@ -1082,7 +1152,7 @@ function MissionWorld({
       )}
 
       {(stage === 'drawing' || stage === 'editing') &&
-        points.map((point, index) => (
+        drawingPoints.map((point, index) => (
           <group
             key={point.id}
             position={toAltitudeMarkerPosition(point, scanAltitude)}
@@ -1107,8 +1177,8 @@ function MissionWorld({
             <mesh position={[0, 0.2, 0]}>
               <sphereGeometry args={[1.3, 22, 22]} />
               <meshStandardMaterial
-                color="#7c6bff"
-                emissive="#7c6bff"
+                color={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
+                emissive={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
                 emissiveIntensity={0.18}
               />
             </mesh>
@@ -1116,7 +1186,9 @@ function MissionWorld({
             <Billboard position={[0, 9, 0]} follow>
               <mesh>
                 <circleGeometry args={[4.2, 36]} />
-                <meshBasicMaterial color="#7c6bff" />
+                <meshBasicMaterial
+                  color={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
+                />
               </mesh>
               <Text
                 position={[0, 0, 0.05]}
@@ -1138,18 +1210,22 @@ function MissionWorld({
               [hoverPoint.x - 3.5, scanAltitude + HOVER_OFFSET, hoverPoint.y],
               [hoverPoint.x + 3.5, scanAltitude + HOVER_OFFSET, hoverPoint.y],
             ]}
-            color="#7c6bff"
+            color={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
           />
           <Line
             points={[
               [hoverPoint.x, scanAltitude + HOVER_OFFSET, hoverPoint.y - 3.5],
               [hoverPoint.x, scanAltitude + HOVER_OFFSET, hoverPoint.y + 3.5],
             ]}
-            color="#7c6bff"
+            color={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
           />
           <mesh position={[hoverPoint.x, scanAltitude + HOVER_OFFSET, hoverPoint.y]}>
             <sphereGeometry args={[0.9, 20, 20]} />
-            <meshBasicMaterial color="#7c6bff" transparent opacity={0.7} />
+            <meshBasicMaterial
+              color={drawingTarget === 'exclusion' ? '#f97316' : '#7c6bff'}
+              transparent
+              opacity={0.7}
+            />
           </mesh>
         </>
       )}
@@ -1364,6 +1440,114 @@ function MissionWorld({
         isMissionGenerated={stage === 'generated'}
         isWaypointSelected={selectedWaypoint !== null}
       />
+    </>
+  )
+}
+
+function ExclusionZoneMesh({
+  zone,
+  altitude,
+  isActive,
+  onSelect,
+}: {
+  zone: ExclusionZone
+  altitude: number
+  isActive: boolean
+  onSelect?: ((id: number | null) => void) | undefined
+}) {
+  const shape = useMemo(
+    () => (zone.points.length >= 3 ? buildPolygonShape(zone.points) : null),
+    [zone.points],
+  )
+  const outlinePoints = useMemo(
+    () =>
+      zone.points.length >= 3
+        ? [
+            ...zone.points.map((point) =>
+              toAltitudePlanePosition(point, altitude, ALTITUDE_LINE_OFFSET + 0.12),
+            ),
+            toAltitudePlanePosition(
+              zone.points[0],
+              altitude,
+              ALTITUDE_LINE_OFFSET + 0.12,
+            ),
+          ]
+        : [],
+    [altitude, zone.points],
+  )
+  const centroid = useMemo(
+    () => (zone.points.length >= 3 ? polygonCentroid(zone.points) : null),
+    [zone.points],
+  )
+  const fillOpacity = zone.enabled
+    ? isActive
+      ? 0.22
+      : 0.14
+    : 0.05
+  const lineOpacity = zone.enabled
+    ? isActive
+      ? 0.9
+      : 0.72
+    : 0.34
+  const labelColor = zone.enabled ? '#f97316' : '#94a3b8'
+
+  if (!shape || outlinePoints.length < 2 || !centroid) {
+    return null
+  }
+
+  return (
+    <>
+      <mesh
+        rotation-x={-Math.PI / 2}
+        position={[0, altitude + ALTITUDE_PLANE_FILL_OFFSET * 1.2, 0]}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect?.(zone.id)
+        }}
+      >
+        <shapeGeometry args={[shape]} />
+        <meshStandardMaterial
+          color={zone.enabled ? '#f97316' : '#94a3b8'}
+          transparent
+          opacity={fillOpacity}
+        />
+      </mesh>
+      <Line
+        points={outlinePoints}
+        color={zone.enabled ? '#ea580c' : '#94a3b8'}
+        transparent
+        opacity={lineOpacity}
+        dashed
+        dashSize={4}
+        gapSize={3}
+        lineWidth={isActive ? 2.4 : 1.8}
+      />
+      <Billboard
+        position={[
+          centroid.x,
+          altitude + ALTITUDE_MARKER_LIFT * 1.55,
+          centroid.y,
+        ]}
+        follow
+      >
+        <mesh>
+          <planeGeometry args={[Math.max(18, zone.label.length * 1.5), 4.2]} />
+          <meshBasicMaterial
+            color={zone.enabled ? '#fff7ed' : '#f8fafc'}
+            transparent
+            opacity={0.94}
+          />
+        </mesh>
+        <Text
+          position={[0, 0, 0.05]}
+          fontSize={1.9}
+          color={labelColor}
+          anchorX="center"
+          anchorY="middle"
+        >
+          {zone.label}
+        </Text>
+      </Billboard>
     </>
   )
 }
@@ -3003,6 +3187,19 @@ function toDronePosition(
   altitude: number,
 ): ScenePoint {
   return [point.x, altitude + DRONE_LIFT, point.y]
+}
+
+function buildPolygonShape(points: MissionPoint[]): THREE.Shape {
+  const shape = new THREE.Shape()
+  shape.moveTo(points[0].x, toShapePlaneY(points[0].y))
+
+  points.slice(1).forEach((point) => {
+    shape.lineTo(point.x, toShapePlaneY(point.y))
+  })
+
+  shape.lineTo(points[0].x, toShapePlaneY(points[0].y))
+
+  return shape
 }
 
 function toShapePlaneY(value: number): number {
