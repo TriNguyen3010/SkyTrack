@@ -10,12 +10,14 @@ interface WaypointDensityPanelProps {
   countFloor: number
   countCeiling: number
   protectedCount: number
+  originalAnchorCount: number
   isExpanded: boolean
   isPending: boolean
   onToggleExpanded: () => void
   onModeChange: (mode: WaypointDensityConfig['mode']) => void
   onCountChange: (count: number) => void
   onSpacingChange: (spacing: number) => void
+  onResetToOriginal: () => void
 }
 
 function getModeLabel(mode: WaypointDensityConfig['mode']): string {
@@ -37,12 +39,14 @@ export function WaypointDensityPanel({
   countFloor,
   countCeiling,
   protectedCount,
+  originalAnchorCount,
   isExpanded,
   isPending,
   onToggleExpanded,
   onModeChange,
   onCountChange,
   onSpacingChange,
+  onResetToOriginal,
 }: WaypointDensityPanelProps) {
   const [draftCountValue, setDraftCountValue] = useState('')
   const isCountMode = config.mode === 'count'
@@ -256,7 +260,7 @@ export function WaypointDensityPanel({
 
           {isSimplifyMode && (
             <div className="density-note">
-              Simplify removes the least important turn points first while keeping locked mission points.
+              Simplify removes the least important turn points first while keeping locked mission points. Original route: {originalAnchorCount} turn points.
             </div>
           )}
 
@@ -264,6 +268,16 @@ export function WaypointDensityPanel({
             <div className="density-note">
               At the simplify floor. Further reduction would remove locked mission points.
             </div>
+          )}
+
+          {isSimplifyMode && (
+            <button
+              type="button"
+              className="density-reset-button"
+              onClick={onResetToOriginal}
+            >
+              Reset to original anchors
+            </button>
           )}
 
           {isBelowMinimum && (

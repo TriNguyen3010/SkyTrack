@@ -149,4 +149,66 @@ describe('flight pattern density integration', () => {
     expect(mission?.waypoints).toHaveLength(5)
     expect(mission?.waypoints.every((waypoint) => waypoint.role === 'anchor')).toBe(true)
   })
+
+  it('keeps perimeter simplify above the closed-loop minimum floor', () => {
+    const mission = buildFlightPatternMission('perimeter', {
+      points: boundary,
+      exclusionZones: [],
+      paramsByPattern: createInitialPatternParams({
+        scanAltitude: 50,
+        lineSpacing: 20,
+        orientation: 0,
+      }),
+      waypointDensity: {
+        mode: 'count',
+        targetCount: 3,
+        targetSpacing: null,
+      },
+    })
+
+    expect(mission).not.toBeNull()
+    expect(mission?.closed).toBe(true)
+    expect(mission?.waypoints).toHaveLength(4)
+  })
+
+  it('keeps orbit simplify above the closed-loop minimum floor', () => {
+    const mission = buildFlightPatternMission('orbit', {
+      points: boundary,
+      exclusionZones: [],
+      paramsByPattern: createInitialPatternParams({
+        scanAltitude: 50,
+        lineSpacing: 20,
+        orientation: 0,
+      }),
+      waypointDensity: {
+        mode: 'count',
+        targetCount: 4,
+        targetSpacing: null,
+      },
+    })
+
+    expect(mission).not.toBeNull()
+    expect(mission?.closed).toBe(true)
+    expect(mission?.waypoints).toHaveLength(6)
+  })
+
+  it('caps densified missions at 200 waypoints', () => {
+    const mission = buildFlightPatternMission('coverage', {
+      points: boundary,
+      exclusionZones: [],
+      paramsByPattern: createInitialPatternParams({
+        scanAltitude: 50,
+        lineSpacing: 5,
+        orientation: 0,
+      }),
+      waypointDensity: {
+        mode: 'count',
+        targetCount: 400,
+        targetSpacing: null,
+      },
+    })
+
+    expect(mission).not.toBeNull()
+    expect(mission?.waypoints.length).toBeLessThanOrEqual(200)
+  })
 })

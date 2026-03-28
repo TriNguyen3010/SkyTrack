@@ -1381,6 +1381,17 @@
   color: #b45309;
 }
 
+.density-reset-button {
+  align-self: flex-start;
+  border: 1px solid rgba(139, 92, 246, 0.18);
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.08);
+  padding: 10px 12px;
+  color: #6d28d9;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .density-pending {
   color: #8b5cf6;
 }

@@ -430,35 +430,35 @@ export function getWaypointDensityConstraints(
     case 'grid':
       return {
         minSpacing: 2,
-        maxWaypoints: null,
+        maxWaypoints: 200,
         minimumWaypointCount: 4,
         isClosedLoop: false,
       }
     case 'perimeter':
       return {
         minSpacing: 2,
-        maxWaypoints: null,
+        maxWaypoints: 200,
         minimumWaypointCount: 4,
         isClosedLoop: closed,
       }
     case 'orbit':
       return {
         minSpacing: 2,
-        maxWaypoints: null,
+        maxWaypoints: 200,
         minimumWaypointCount: 6,
         isClosedLoop: closed,
       }
     case 'spiral':
       return {
         minSpacing: 2,
-        maxWaypoints: null,
+        maxWaypoints: 200,
         minimumWaypointCount: 4,
         isClosedLoop: false,
       }
     case 'corridor':
       return {
         minSpacing: 2,
-        maxWaypoints: null,
+        maxWaypoints: 200,
         minimumWaypointCount: 2,
         isClosedLoop: false,
       }

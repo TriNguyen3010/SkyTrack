@@ -111,6 +111,7 @@ import {
   getProtectedWaypointCount,
   getWaypointCountFloor,
 } from './lib/waypointDensity'
+import { DEFAULT_WAYPOINT_DENSITY_CONFIG } from './lib/waypointDensityModels'
 import {
   countIntermediateWaypointActions,
   migrateAnchorActionsToDensityMission,
@@ -343,6 +344,24 @@ function App() {
     stage === 'generated' ? generatedPatternId ?? selectedPattern : selectedPattern
   const displayPatternMeta =
     stage === 'generated' ? generatedPatternMeta : selectedPatternMission?.meta ?? null
+  const basePatternMission = useMemo(
+    () =>
+      isPolygonValid
+        ? buildFlightPatternMission(displayPatternId, {
+            points,
+            exclusionZones: enabledExclusionZones,
+            paramsByPattern: patternParamsByPattern,
+            waypointDensity: DEFAULT_WAYPOINT_DENSITY_CONFIG,
+          })
+        : null,
+    [
+      displayPatternId,
+      enabledExclusionZones,
+      isPolygonValid,
+      patternParamsByPattern,
+      points,
+    ],
+  )
   const displayPatternSegments = useMemo(
     () => (stage === 'generated' ? generatedSegments : activePreviewMission?.segments ?? []),
     [activePreviewMission, generatedSegments, stage],
@@ -466,13 +485,15 @@ function App() {
     ],
   )
   const generatedDensityBaseCount = generatedDensityMetrics.anchorCount
+  const originalAnchorWaypointCount =
+    basePatternMission?.anchorWaypoints.length ?? generatedDensityBaseCount
   const generatedDensityCountFloor =
     waypointDensity.mode === 'simplify'
       ? generatedSimplifyFloor
       : generatedDensityMetrics.minimumCount
   const generatedDensityCountCeiling =
     waypointDensity.mode === 'simplify'
-      ? Math.max(generatedDensityBaseCount, generatedDensityCountFloor)
+      ? Math.max(originalAnchorWaypointCount, generatedDensityCountFloor)
       : Math.max(
           generatedDensityMetrics.maximumCount ?? 0,
           generatedDensityMetrics.minimumCount * 3,
@@ -1218,7 +1239,7 @@ function App() {
     if (mode === 'count') {
       setTargetWaypointCount(
         Math.max(
-          generatedDensityMetrics.anchorCount,
+          originalAnchorWaypointCount,
           waypointDensity.targetCount ?? generatedDensityMetrics.totalCount,
         ),
       )
@@ -1231,7 +1252,7 @@ function App() {
       setTargetWaypointCount(
         Math.max(
           generatedDensityCountFloor,
-          Math.min(requestedCount, generatedDensityBaseCount),
+          Math.min(requestedCount, originalAnchorWaypointCount),
         ),
       )
     }
@@ -1260,6 +1281,13 @@ function App() {
     }
 
     setTargetWaypointSpacing(Math.max(2, value))
+  }
+
+  function handleResetWaypointDensity() {
+    setWaypointDensityConfig({
+      ...DEFAULT_WAYPOINT_DENSITY_CONFIG,
+    })
+    clearInteractionNotice()
   }
 
   function handleSelectPattern(patternId: FlightPatternId) {
@@ -2402,6 +2430,7 @@ function App() {
                   countFloor={generatedDensityCountFloor}
                   countCeiling={generatedDensityCountCeiling}
                   protectedCount={generatedProtectedWaypointCount}
+                  originalAnchorCount={originalAnchorWaypointCount}
                   isExpanded={isWaypointDensityExpanded}
                   isPending={isGeneratedDensityPending}
                   onToggleExpanded={() =>
@@ -2410,6 +2439,7 @@ function App() {
                   onModeChange={handleWaypointDensityModeChange}
                   onCountChange={handleWaypointDensityCountChange}
                   onSpacingChange={handleWaypointDensitySpacingChange}
+                  onResetToOriginal={handleResetWaypointDensity}
                 />
 
                 <ExclusionZoneSection
