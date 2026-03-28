@@ -22,6 +22,11 @@ import {
 } from '../lib/missionGeometry'
 import { getStartWaypointPolicy } from '../lib/waypointInteraction'
 import type {
+  MissionBatteryReport,
+  SafetyLevel,
+  WaypointBatteryEstimate,
+} from '../lib/batteryModels'
+import type {
   MissionPoint,
   MissionStage,
   MissionWaypoint,
@@ -81,6 +86,7 @@ interface MissionViewport3DProps {
   points: MissionPoint[]
   patternSegments: Array<[Vec2, Vec2]>
   waypoints: MissionWaypoint[]
+  batteryReport?: MissionBatteryReport | null
   selectedWaypointId: number | null
   hoveredWaypointId?: number | null
   selectedPattern: FlightPatternId
@@ -109,6 +115,7 @@ export function MissionViewport3D({
   points,
   patternSegments,
   waypoints,
+  batteryReport = null,
   selectedWaypointId,
   hoveredWaypointId = null,
   selectedPattern,
@@ -206,6 +213,7 @@ export function MissionViewport3D({
           points={points}
           patternSegments={patternSegments}
           waypoints={waypoints}
+          batteryReport={batteryReport}
           selectedWaypointId={selectedWaypointId}
           hoveredWaypointId={hoveredWaypointId}
           selectedPattern={selectedPattern}
@@ -302,6 +310,7 @@ function MissionWorld({
   points,
   patternSegments,
   waypoints,
+  batteryReport = null,
   selectedWaypointId,
   hoveredWaypointId = null,
   selectedPattern,
@@ -668,24 +677,32 @@ function MissionWorld({
 
     return shape
   }, [points])
-  const routeLinePoints = useMemo(
+  const waypointBatteryEstimates = useMemo(
+    () => batteryReport?.waypointEstimates ?? [],
+    [batteryReport],
+  )
+  const waypointBatteryEstimateMap = useMemo(
     () =>
-      waypoints.map((waypoint) =>
-        toAltitudePlanePosition(waypoint, waypoint.z, ALTITUDE_LINE_OFFSET),
+      new Map(
+        waypointBatteryEstimates.map((estimate) => [estimate.waypointId, estimate] as const),
       ),
-    [waypoints],
+    [waypointBatteryEstimates],
   )
   const revealedWaypoints = useMemo(
     () => getRevealedWaypoints(waypoints, routeRevealAnimation),
     [routeRevealAnimation, waypoints],
   )
-  const revealedRouteLinePoints = useMemo(
-    () => getRevealedRouteLinePoints(routeLinePoints, routeRevealAnimation),
-    [routeLinePoints, routeRevealAnimation],
-  )
   const revealedRouteSegments = useMemo(
     () => buildWaypointSegments(revealedWaypoints),
     [revealedWaypoints],
+  )
+  const revealedColoredRouteSegments = useMemo(
+    () =>
+      buildColoredRouteSegments({
+        waypoints: revealedWaypoints,
+        waypointEstimateMap: waypointBatteryEstimateMap,
+      }),
+    [revealedWaypoints, waypointBatteryEstimateMap],
   )
   const routeDirectionChevrons = useMemo(
     () => buildRouteDirectionChevrons(revealedRouteSegments, scanAltitude),
@@ -702,6 +719,7 @@ function MissionWorld({
     !isClosedLoopPattern && waypoints.length > 1
       ? waypoints[waypoints.length - 1]?.id ?? null
       : null
+  const pointOfNoReturnId = batteryReport?.pointOfNoReturn ?? null
 
   const flightAnchor = useMemo(() => {
     if (selectedWaypoint) {
@@ -1019,19 +1037,25 @@ function MissionWorld({
               toGroundSurfacePosition(waypoint),
               toAltitudeMarkerPosition(waypoint, waypoint.z),
             ]}
-            color={selectedPatternColor}
+            color={
+              getSafetyLevelColor(
+                waypointBatteryEstimateMap.get(waypoint.id)?.safetyLevel ?? 'safe',
+              )
+            }
             transparent
             opacity={selectedWaypointId === waypoint.id ? 0.9 : 0.32}
           />
         ))}
 
-      {stage === 'generated' && revealedRouteLinePoints.length >= 2 && (
-        <Line
-          points={revealedRouteLinePoints}
-          color={selectedPatternColor}
-          lineWidth={3.2}
-        />
-      )}
+      {stage === 'generated' &&
+        revealedColoredRouteSegments.map((segment, index) => (
+          <Line
+            key={`route-segment-${index}`}
+            points={segment.points}
+            color={segment.color}
+            lineWidth={3.2}
+          />
+        ))}
 
       {stage === 'generated' &&
         routeDirectionChevrons.map((chevron, index) => (
@@ -1137,6 +1161,11 @@ function MissionWorld({
           const actionCount = waypoint.actions.length
           const isStartWaypoint = waypoint.id === startWaypointId
           const isEndWaypoint = waypoint.id === endWaypointId
+          const batteryEstimate = waypointBatteryEstimateMap.get(waypoint.id) ?? null
+          const waypointSafetyColor = getSafetyLevelColor(
+            batteryEstimate?.safetyLevel ?? 'safe',
+          )
+          const isPointOfNoReturn = waypoint.id === pointOfNoReturnId
 
           return (
             <group
@@ -1193,11 +1222,35 @@ function MissionWorld({
                 <mesh rotation-x={-Math.PI / 2} position={[0, 0.24, 0]}>
                   <ringGeometry args={[3.6, 4.4, 36]} />
                   <meshBasicMaterial
-                    color={selectedPatternColor}
+                    color={waypointSafetyColor}
                     transparent
                     opacity={0.32}
                   />
                 </mesh>
+              )}
+
+              {isPointOfNoReturn && (
+                <>
+                  <mesh rotation-x={-Math.PI / 2} position={[0, 0.18, 0]}>
+                    <ringGeometry args={[4.2, 5.3, 40]} />
+                    <meshBasicMaterial color="#f97316" transparent opacity={0.66} />
+                  </mesh>
+                  <Billboard position={[0, 18, 0]} follow>
+                    <mesh>
+                      <planeGeometry args={[10.8, 4]} />
+                      <meshBasicMaterial color="#f97316" transparent opacity={0.96} />
+                    </mesh>
+                    <Text
+                      position={[0, 0, 0.05]}
+                      fontSize={1.95}
+                      color="#ffffff"
+                      anchorX="center"
+                      anchorY="middle"
+                    >
+                      PNR
+                    </Text>
+                  </Billboard>
+                </>
               )}
 
               <mesh>
@@ -1207,8 +1260,8 @@ function MissionWorld({
               <mesh position={[0, 0.12, 0]}>
                 <sphereGeometry args={[isSelected ? 1.6 : 1.4, 22, 22]} />
                 <meshStandardMaterial
-                  color={selectedPatternColor}
-                  emissive={selectedPatternColor}
+                  color={waypointSafetyColor}
+                  emissive={waypointSafetyColor}
                   emissiveIntensity={isSelected ? 0.32 : isHovered ? 0.3 : 0.22}
                 />
               </mesh>
@@ -1216,7 +1269,7 @@ function MissionWorld({
               <Billboard position={[0, 8.6, 0]} follow>
                 <mesh>
                   <circleGeometry args={[4.2, 36]} />
-                  <meshBasicMaterial color={selectedPatternColor} />
+                  <meshBasicMaterial color={waypointSafetyColor} />
                 </mesh>
                 <Text
                   position={[0, 0, 0.05]}
@@ -1228,6 +1281,26 @@ function MissionWorld({
                   {waypoint.id}
                 </Text>
               </Billboard>
+
+              {(isHovered || isSelected) && batteryEstimate && (
+                <Billboard position={[0, 23, 0]} follow>
+                  <mesh>
+                    <planeGeometry args={[22, 5.2]} />
+                    <meshBasicMaterial color="#0f172a" transparent opacity={0.92} />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={1.9}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    {`WP ${waypoint.id} · ~${Math.round(
+                      batteryEstimate.remainingPercent,
+                    )}%`}
+                  </Text>
+                </Billboard>
+              )}
 
               {isStartWaypoint && (
                 <Billboard position={[0, 14.2, 0]} follow>
@@ -2440,6 +2513,41 @@ function buildWaypointSegments(
   ])
 }
 
+function buildColoredRouteSegments({
+  waypoints,
+  waypointEstimateMap,
+}: {
+  waypoints: MissionWaypoint[]
+  waypointEstimateMap: Map<number, WaypointBatteryEstimate>
+}): Array<{ points: ScenePoint[]; color: string }> {
+  return waypoints.slice(1).map((waypoint, index) => {
+    const previousWaypoint = waypoints[index]
+    const estimate = waypointEstimateMap.get(waypoint.id)
+    const color = getSafetyLevelColor(estimate?.safetyLevel ?? 'safe')
+
+    return {
+      points: [
+        toAltitudePlanePosition(previousWaypoint, previousWaypoint.z, ALTITUDE_LINE_OFFSET),
+        toAltitudePlanePosition(waypoint, waypoint.z, ALTITUDE_LINE_OFFSET),
+      ],
+      color,
+    }
+  })
+}
+
+function getSafetyLevelColor(level: SafetyLevel): string {
+  switch (level) {
+    case 'safe':
+      return '#10b981'
+    case 'caution':
+      return '#eab308'
+    case 'warning':
+      return '#f97316'
+    case 'critical':
+      return '#ef4444'
+  }
+}
+
 function buildRouteDirectionChevrons(
   segments: Array<[Vec2, Vec2]>,
   altitude: number,
@@ -3013,20 +3121,6 @@ function getDisplayedPreviewSegments(
   return transition.toSegments.slice(
     0,
     getRevealCount(transition.toSegments.length, getPreviewPhaseProgress(transition)),
-  )
-}
-
-function getRevealedRouteLinePoints(
-  routeLinePoints: ScenePoint[],
-  animation: TimedRevealAnimation | null,
-): ScenePoint[] {
-  if (!animation) {
-    return routeLinePoints
-  }
-
-  return routeLinePoints.slice(
-    0,
-    getRevealCount(routeLinePoints.length, animation.elapsed / animation.duration),
   )
 }
 

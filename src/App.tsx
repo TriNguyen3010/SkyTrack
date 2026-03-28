@@ -35,6 +35,9 @@ import {
   BatterySummaryBar,
 } from './components/BatterySummaryBar'
 import {
+  BatteryWarningBanner,
+} from './components/BatteryWarningBanner'
+import {
   DroneProfileSelector,
 } from './components/DroneProfileSelector'
 import {
@@ -1105,6 +1108,7 @@ function App() {
               points={points}
               patternSegments={patternSegments}
               waypoints={orderedWaypoints}
+              batteryReport={generatedBatteryReport}
               selectedWaypointId={selectedWaypointId}
               selectedPattern={selectedPattern}
               hoveredPattern={hoveredPattern}
@@ -1940,6 +1944,10 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {generatedBatteryReport && !generatedBatteryReport.isFeasible && (
+                  <BatteryWarningBanner report={generatedBatteryReport} />
+                )}
 
                 {generatedBatteryReport && (
                   <BatterySummaryBar

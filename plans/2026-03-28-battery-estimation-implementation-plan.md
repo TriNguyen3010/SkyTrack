@@ -269,6 +269,8 @@ Status: implemented, build/lint/test passed. Setup now exposes drone and safety 
 
 ### Stream D: Safety Overlay + Viewport Integration
 
+Status: implemented, build/lint/test passed. Generated missions now expose an infeasible battery warning banner, the viewport colors waypoint markers and route segments by safety level, hover/selection shows estimated battery percentage, and the point-of-no-return is marked directly on the mission path.
+
 #### Scope
 
 - per-waypoint safety color
@@ -372,6 +374,6 @@ Lý do:
 - [x] Stream A: Data models + store foundation
 - [x] Stream B: Core battery estimation engine
 - [x] Stream C: Progressive disclosure UI
-- [ ] Stream D: Safety overlay + viewport integration
+- [x] Stream D: Safety overlay + viewport integration
 - [ ] Stream E: Recommendations + advanced safety
 - [ ] Dùng file này làm nguồn đối chiếu khi implement Battery Estimation Spec
