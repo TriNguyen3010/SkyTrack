@@ -15,6 +15,7 @@ function createWaypoint(
     y,
     z,
     actions: [],
+    role: 'anchor',
   }
 }
 

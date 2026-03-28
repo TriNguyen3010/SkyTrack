@@ -403,13 +403,14 @@ function generatePerimeterMission({
     const loopPoints = loopIndex === 0 ? orderedBoundary : orderedBoundary.slice(1)
 
     loopPoints.forEach((point) => {
-      waypointRoute.push({
-        id: waypointRoute.length + 1,
-        x: Math.round(point.x * 100) / 100,
-        y: Math.round(point.y * 100) / 100,
-        z: scanAltitude,
-        actions: [],
-      })
+        waypointRoute.push({
+          id: waypointRoute.length + 1,
+          x: Math.round(point.x * 100) / 100,
+          y: Math.round(point.y * 100) / 100,
+          z: scanAltitude,
+          actions: [],
+          role: 'anchor',
+        })
     })
   }
 
@@ -478,13 +479,14 @@ function generateOrbitMission({
     const loopPoints = loopIndex === 0 ? baseRing : baseRing.slice(1)
 
     loopPoints.forEach((point) => {
-      orbitRoute.push({
-        id: orbitRoute.length + 1,
-        x: Math.round(point.x * 100) / 100,
-        y: Math.round(point.y * 100) / 100,
-        z: scanAltitude,
-        actions: [],
-      })
+        orbitRoute.push({
+          id: orbitRoute.length + 1,
+          x: Math.round(point.x * 100) / 100,
+          y: Math.round(point.y * 100) / 100,
+          z: scanAltitude,
+          actions: [],
+          role: 'anchor',
+        })
     })
   }
 
@@ -636,6 +638,7 @@ function generateSpiralMission({
     y: Math.round(point.y * 100) / 100,
     z: scanAltitude,
     actions: [],
+    role: 'anchor',
   }))
   const waypoints = normalizeWaypointIds(
     filterWaypointsOutsideExclusions(spiralCandidates, exclusionZones),

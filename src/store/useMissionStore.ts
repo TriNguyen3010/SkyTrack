@@ -1,4 +1,17 @@
 import { create } from 'zustand'
+import type {
+  WaypointDensityConfig,
+  WaypointRole,
+} from '../lib/waypointDensityModels'
+import {
+  DEFAULT_WAYPOINT_DENSITY_CONFIG,
+} from '../lib/waypointDensityModels'
+import type {
+  FlightPatternId,
+  FlightPatternMissionMeta,
+  FlightPatternMissionResult,
+} from '../lib/flightPatterns'
+import type { Vec2 } from '../lib/missionGeometry'
 import {
   DEFAULT_DRONE_PROFILE_ID,
   DEFAULT_HOME_POINT,
@@ -41,6 +54,7 @@ export interface MissionWaypoint {
   y: number
   z: number
   actions: MissionWaypointAction[]
+  role: WaypointRole
 }
 
 interface MissionState {
@@ -58,6 +72,11 @@ interface MissionState {
   exclusionZones: ExclusionZone[]
   activeExclusionZoneId: number | null
   drawingTarget: DrawingTarget
+  waypointDensity: WaypointDensityConfig
+  generatedPatternId: FlightPatternId | null
+  generatedPatternMeta: FlightPatternMissionMeta | null
+  generatedSegments: Array<[Vec2, Vec2]>
+  generatedClosed: boolean
   waypoints: MissionWaypoint[]
   selectedWaypointId: number | null
   startWaypointId: number | null
@@ -78,12 +97,15 @@ interface MissionState {
   toggleExclusionZone: (zoneId: number) => void
   setActiveExclusionZone: (zoneId: number | null) => void
   setDrawingTarget: (target: DrawingTarget) => void
+  setWaypointDensityMode: (mode: WaypointDensityConfig['mode']) => void
+  setTargetWaypointCount: (count: number) => void
+  setTargetWaypointSpacing: (spacing: number) => void
   enterSetup: () => void
   cancelSetup: () => void
   startDrawing: () => void
   cancelDrawing: () => void
   closePolygon: () => void
-  generatePath: (waypoints: MissionWaypoint[]) => void
+  generatePath: (mission: FlightPatternMissionResult) => void
   editGeneratedPath: () => void
   redrawMission: () => void
   resetMission: () => void
@@ -140,6 +162,10 @@ function createExclusionZone(zoneId: number, labelIndex: number): ExclusionZone 
 
 function clearDerivedMissionState() {
   return {
+    generatedPatternId: null as FlightPatternId | null,
+    generatedPatternMeta: null as FlightPatternMissionMeta | null,
+    generatedSegments: [] as Array<[Vec2, Vec2]>,
+    generatedClosed: false,
     waypoints: [] as MissionWaypoint[],
     selectedWaypointId: null as number | null,
     startWaypointId: null as number | null,
@@ -174,6 +200,11 @@ const initialState = {
   exclusionZones: [] as ExclusionZone[],
   activeExclusionZoneId: null as number | null,
   drawingTarget: 'boundary' as DrawingTarget,
+  waypointDensity: { ...DEFAULT_WAYPOINT_DENSITY_CONFIG } as WaypointDensityConfig,
+  generatedPatternId: null as FlightPatternId | null,
+  generatedPatternMeta: null as FlightPatternMissionMeta | null,
+  generatedSegments: [] as Array<[Vec2, Vec2]>,
+  generatedClosed: false,
   waypoints: [] as MissionWaypoint[],
   selectedWaypointId: null as number | null,
   startWaypointId: null as number | null,
@@ -242,6 +273,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         stage:
           removedActiveZone && state.stage === 'drawing'
             ? getDrawingCancelStage(state)
+            : state.stage === 'generated'
+              ? 'editing'
             : state.stage,
         ...clearDerivedMissionState(),
       }
@@ -262,6 +295,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       exclusionZones: state.exclusionZones.map((zone) =>
         zone.id === zoneId ? { ...zone, enabled: !zone.enabled } : zone,
       ),
+      stage: state.stage === 'generated' ? 'editing' : state.stage,
       ...clearDerivedMissionState(),
     })),
   setActiveExclusionZone: (zoneId) =>
@@ -276,6 +310,27 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       drawingTarget: target,
       activeExclusionZoneId:
         target === 'boundary' ? null : state.activeExclusionZoneId,
+    })),
+  setWaypointDensityMode: (mode) =>
+    set((state) => ({
+      waypointDensity: {
+        ...state.waypointDensity,
+        mode,
+      },
+    })),
+  setTargetWaypointCount: (count) =>
+    set((state) => ({
+      waypointDensity: {
+        ...state.waypointDensity,
+        targetCount: Math.max(1, Math.round(count)),
+      },
+    })),
+  setTargetWaypointSpacing: (spacing) =>
+    set((state) => ({
+      waypointDensity: {
+        ...state.waypointDensity,
+        targetSpacing: Math.max(0.1, Math.round(spacing * 100) / 100),
+      },
     })),
   enterSetup: () =>
     set({
@@ -357,14 +412,18 @@ export const useMissionStore = create<MissionState>((set, get) => ({
             }
           : state,
     ),
-  generatePath: (waypoints) =>
+  generatePath: (mission) =>
     set((state) => ({
       stage: 'generated',
-      waypoints,
+      generatedPatternId: mission.patternId,
+      generatedPatternMeta: mission.meta,
+      generatedSegments: mission.segments,
+      generatedClosed: mission.closed,
+      waypoints: mission.waypoints,
       activeExclusionZoneId: null,
       drawingTarget: 'boundary',
       selectedWaypointId: null,
-      startWaypointId: waypoints.some(
+      startWaypointId: mission.waypoints.some(
         (waypoint) => waypoint.id === state.startWaypointId,
       )
         ? state.startWaypointId
