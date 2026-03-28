@@ -200,6 +200,8 @@ Status: implemented, build/lint passed. Battery data models, presets, safety pre
 
 ### Stream B: Core Battery Estimation Engine
 
+Status: implemented, build/lint/test passed. Core nominal battery estimation, direct RTH reserve, safety classification, point-of-no-return detection, and battery warning generation are now in place with unit coverage for home-to-first travel, closed loops, altitude-changing actions, and infeasible missions.
+
 #### Scope
 
 - implement `computeBatteryReport()`
@@ -366,7 +368,7 @@ Lý do:
 ## 12. Checklist đối chiếu
 
 - [x] Stream A: Data models + store foundation
-- [ ] Stream B: Core battery estimation engine
+- [x] Stream B: Core battery estimation engine
 - [ ] Stream C: Progressive disclosure UI
 - [ ] Stream D: Safety overlay + viewport integration
 - [ ] Stream E: Recommendations + advanced safety
