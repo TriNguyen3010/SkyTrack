@@ -256,6 +256,7 @@ function App() {
   const waypointRowRefs = useRef(new Map<number, HTMLButtonElement | null>())
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
+  const previousSelectedPatternRef = useRef(selectedPattern)
   const selectedPatternOption = useMemo(
     () => getFlightPatternDefinition(selectedPattern),
     [selectedPattern],
@@ -825,12 +826,22 @@ function App() {
 
   useEffect(() => {
     if (!isBulkAssignActive(bulkAssignActionType)) {
+      previousSelectedPatternRef.current = selectedPattern
       return undefined
     }
 
+    if (previousSelectedPatternRef.current === selectedPattern) {
+      return undefined
+    }
+
+    previousSelectedPatternRef.current = selectedPattern
     setBulkAssignActionType(null)
     return undefined
-  }, [bulkAssignActionType, selectedPattern, setBulkAssignActionType])
+  }, [
+    bulkAssignActionType,
+    selectedPattern,
+    setBulkAssignActionType,
+  ])
 
   useEffect(() => {
     if (!isBulkAssignActive(bulkAssignActionType)) {
@@ -882,6 +893,39 @@ function App() {
       window.cancelAnimationFrame(frameId)
     }
   }, [hoveredWaypointId, stage])
+
+  useEffect(() => {
+    if (stage !== 'generated' || selectedWaypointId === null) {
+      return undefined
+    }
+
+    const container = behaviorListRef.current
+    const row = waypointRowRefs.current.get(selectedWaypointId)
+
+    if (!container || !row) {
+      return undefined
+    }
+
+    const containerRect = container.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const isAboveViewport = rowRect.top < containerRect.top + 8
+    const isBelowViewport = rowRect.bottom > containerRect.bottom - 8
+
+    if (!isAboveViewport && !isBelowViewport) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      row.scrollIntoView({
+        block: 'nearest',
+        behavior: 'smooth',
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [selectedWaypointId, stage])
 
   useEffect(() => {
     if (
@@ -2506,7 +2550,12 @@ function App() {
                     isClosedLoop={isClosedMissionLoop}
                     onHoverChange={setHoveredWaypoint}
                     onRegisterRow={(node) => {
-                      waypointRowRefs.current.set(waypoint.id, node)
+                      if (node) {
+                        waypointRowRefs.current.set(waypoint.id, node)
+                        return
+                      }
+
+                      waypointRowRefs.current.delete(waypoint.id)
                     }}
                     onSelect={selectWaypoint}
                   />
