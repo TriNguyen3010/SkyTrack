@@ -305,6 +305,10 @@
   border-color: rgba(124, 107, 255, 0.28);
 }
 
+.waypoint-drag-tooltip.is-selected {
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
 .waypoint-drag-tooltip.is-clamped {
   border-color: rgba(239, 68, 68, 0.4);
 }
@@ -323,6 +327,12 @@
   grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 8px;
   align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.waypoint-drag-tooltip__row.is-active-axis {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .waypoint-drag-tooltip__row span {
@@ -334,9 +344,17 @@
   font-weight: 700;
 }
 
+.waypoint-drag-tooltip__row.is-active-axis span,
+.waypoint-drag-tooltip__row.is-active-axis strong {
+  color: #ffffff;
+}
+
 .waypoint-drag-tooltip__row em {
+  min-width: 58px;
+  text-align: right;
   font-style: normal;
   font-weight: 700;
+  color: rgba(226, 232, 240, 0.34);
 }
 
 .waypoint-drag-tooltip__row em.is-positive {
@@ -356,6 +374,30 @@
 
 .waypoint-drag-tooltip__hint.is-danger {
   color: #fca5a5;
+}
+
+.waypoint-action-icon-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.84);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+}
+
+.waypoint-action-icon-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.14);
+  color: #f97316;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .simulation-playback-bar {

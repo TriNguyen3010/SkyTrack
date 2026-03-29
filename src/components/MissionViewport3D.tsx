@@ -7,6 +7,17 @@ import {
   PerspectiveCamera,
   Text,
 } from '@react-three/drei'
+import {
+  Aperture,
+  Camera,
+  Flame,
+  MoveVertical,
+  Package,
+  ScanSearch,
+  TimerReset,
+  Video,
+  type LucideIcon,
+} from 'lucide-react'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -1418,13 +1429,12 @@ function MissionWorld({
       ? null
       : waypoints.find((waypoint) => waypoint.id === draggingWaypointZ.waypointId) ??
         draggingWaypointZ.start
-  const activeWaypointDragTooltip = useMemo(() => {
+  const activeWaypointTooltip = useMemo(() => {
     if (draggingWaypointXY && draggedWaypointXYCurrent) {
       return {
         mode: 'xy' as const,
         waypoint: draggedWaypointXYCurrent,
-        screenX: draggingWaypointXY.clientX,
-        screenY: draggingWaypointXY.clientY,
+        title: `Waypoint ${draggedWaypointXYCurrent.id} · Move`,
         lines: [
           {
             label: 'X',
@@ -1434,6 +1444,7 @@ function MissionWorld({
             delta: formatSignedDistance(
               draggedWaypointXYCurrent.x - draggingWaypointXY.start.x,
             ),
+            active: true,
           },
           {
             label: 'Y',
@@ -1443,9 +1454,15 @@ function MissionWorld({
             delta: formatSignedDistance(
               draggedWaypointXYCurrent.y - draggingWaypointXY.start.y,
             ),
+            active: true,
+          },
+          {
+            label: 'Z',
+            value: `${formatDragNumber(draggedWaypointXYCurrent.z)}m`,
+            delta: null,
+            active: false,
           },
         ],
-        accent: '#7c6bff',
         clampState: 'none' as const,
         snapActive: false,
       }
@@ -1455,9 +1472,20 @@ function MissionWorld({
       return {
         mode: 'z' as const,
         waypoint: draggedWaypointZCurrent,
-        screenX: draggingWaypointZ.clientX,
-        screenY: draggingWaypointZ.clientY,
+        title: `Waypoint ${draggedWaypointZCurrent.id} · Altitude`,
         lines: [
+          {
+            label: 'X',
+            value: `${formatDragNumber(draggedWaypointZCurrent.x)}m`,
+            delta: null,
+            active: false,
+          },
+          {
+            label: 'Y',
+            value: `${formatDragNumber(draggedWaypointZCurrent.y)}m`,
+            delta: null,
+            active: false,
+          },
           {
             label: 'Z',
             value: `${formatDragNumber(draggingWaypointZ.start.z)}m -> ${formatDragNumber(
@@ -1466,11 +1494,41 @@ function MissionWorld({
             delta: formatSignedDistance(
               draggedWaypointZCurrent.z - draggingWaypointZ.start.z,
             ),
+            active: true,
           },
         ],
-        accent: '#3b82f6',
         clampState: draggingWaypointZ.clampState,
         snapActive: draggingWaypointZ.snapActive,
+      }
+    }
+
+    if (selectedWaypoint) {
+      return {
+        mode: 'selected' as const,
+        waypoint: selectedWaypoint,
+        title: `Waypoint ${selectedWaypoint.id}`,
+        lines: [
+          {
+            label: 'X',
+            value: `${formatDragNumber(selectedWaypoint.x)}m`,
+            delta: null,
+            active: false,
+          },
+          {
+            label: 'Y',
+            value: `${formatDragNumber(selectedWaypoint.y)}m`,
+            delta: null,
+            active: false,
+          },
+          {
+            label: 'Z',
+            value: `${formatDragNumber(selectedWaypoint.z)}m`,
+            delta: null,
+            active: false,
+          },
+        ],
+        clampState: 'none' as const,
+        snapActive: false,
       }
     }
 
@@ -1480,6 +1538,7 @@ function MissionWorld({
     draggedWaypointZCurrent,
     draggingWaypointXY,
     draggingWaypointZ,
+    selectedWaypoint,
   ])
   const isWaypointDragActive =
     draggingWaypointXY !== null || draggingWaypointZ !== null
@@ -1938,13 +1997,9 @@ function MissionWorld({
       {stage === 'generated' &&
         revealedWaypoints.map((waypoint) => {
           const isSelected = selectedWaypointId === waypoint.id
-          const isIntermediate = waypoint.role === 'intermediate'
           const isStemHovered = hoveredWaypointStemId === waypoint.id
           const isStemDragging = draggingWaypointZ?.waypointId === waypoint.id
           const isStemEditableHover = isSelected && isStemHovered
-          const safetyColor = getSafetyLevelColor(
-            waypointBatteryEstimateMap.get(waypoint.id)?.safetyLevel ?? 'safe',
-          )
           const markerPosition = toAltitudeMarkerPosition(waypoint, waypoint.z)
           const markerVector = new THREE.Vector3(...markerPosition)
           const cameraDistance = camera.position.distanceTo(markerVector)
@@ -1963,26 +2018,18 @@ function MissionWorld({
 
           return (
             <group key={`stem-${waypoint.id}`} position={markerPosition}>
-              <Line
-                points={[
-                  [0, stemBottomOffset, 0],
-                  [0, 0, 0],
-                ]}
-                color={isStemEditableHover || isStemDragging ? '#3b82f6' : safetyColor}
-                transparent
-                opacity={
-                  isStemDragging
-                    ? 1
-                    : isStemEditableHover
-                      ? 0.92
-                      : isSelected
-                        ? 0.9
-                        : isIntermediate
-                          ? 0.16
-                          : 0.32
-                }
-                lineWidth={isStemEditableHover || isStemDragging ? 2.8 : 1.4}
-              />
+              {(isStemEditableHover || isStemDragging) && (
+                <Line
+                  points={[
+                    [0, stemBottomOffset, 0],
+                    [0, 0, 0],
+                  ]}
+                  color="#3b82f6"
+                  transparent
+                  opacity={isStemDragging ? 1 : 0.92}
+                  lineWidth={2.8}
+                />
+              )}
 
               {!inputLocked &&
                 !bulkAssignActionType &&
@@ -2239,20 +2286,12 @@ function MissionWorld({
           const isSphereHovered = hoveredWaypointSphereId === waypoint.id
           const isXYDragging = draggingWaypointXY?.waypointId === waypoint.id
           const isSphereEditableHover = isSelected && isSphereHovered
-          const actionCount = waypoint.actions.length
+          const actionIcons = waypoint.actions
+            .slice(0, 3)
+            .map((action) => getWaypointActionViewportIcon(action.type))
           const isStartWaypoint = waypoint.id === startWaypointId
           const isEndWaypoint = waypoint.id === endWaypointId
-          const batteryEstimate = waypointBatteryEstimateMap.get(waypoint.id) ?? null
-          const waypointSafetyColor = getSafetyLevelColor(
-            batteryEstimate?.safetyLevel ?? 'safe',
-          )
           const isPointOfNoReturn = waypoint.id === pointOfNoReturnId
-          const shouldShowPersistentLabel =
-            !isIntermediate ||
-            isSelected ||
-            isHovered ||
-            actionCount > 0 ||
-            isPointOfNoReturn
           const outerRadius = isIntermediate
             ? isSelected
               ? 2.15
@@ -2329,7 +2368,7 @@ function MissionWorld({
                     args={isIntermediate ? [2.8, 3.45, 36] : [3.6, 4.4, 36]}
                   />
                   <meshBasicMaterial
-                    color={waypointSafetyColor}
+                    color={selectedPatternColor}
                     transparent
                     opacity={isIntermediate ? 0.22 : 0.32}
                   />
@@ -2399,8 +2438,8 @@ function MissionWorld({
               <mesh position={[0, 0.12, 0]}>
                 <sphereGeometry args={[innerRadius, 22, 22]} />
                 <meshStandardMaterial
-                  color={waypointSafetyColor}
-                  emissive={waypointSafetyColor}
+                  color={selectedPatternColor}
+                  emissive={selectedPatternColor}
                   emissiveIntensity={
                     isXYDragging
                       ? 0.38
@@ -2415,96 +2454,58 @@ function MissionWorld({
                 />
               </mesh>
 
-              {activeWaypointDragTooltip?.waypoint.id === waypoint.id && (
+              {activeWaypointTooltip?.waypoint.id === waypoint.id && (
                 <Html position={[0, 12.5, 0]} center style={{ transform: 'translate(18px, -18px)' }}>
                   <div
                     className={`waypoint-drag-tooltip ${
-                      activeWaypointDragTooltip.mode === 'z'
+                      activeWaypointTooltip.mode === 'z'
                         ? 'is-altitude'
-                        : 'is-xy'
+                        : activeWaypointTooltip.mode === 'xy'
+                          ? 'is-xy'
+                          : 'is-selected'
                     } ${
-                      activeWaypointDragTooltip.clampState === 'none'
+                      activeWaypointTooltip.clampState === 'none'
                         ? ''
                         : 'is-clamped'
                     }`}
                   >
                     <div className="waypoint-drag-tooltip__title">
-                      {activeWaypointDragTooltip.mode === 'z'
-                        ? `Waypoint ${waypoint.id} · Altitude`
-                        : `Waypoint ${waypoint.id} · Move`}
+                      {activeWaypointTooltip.title}
                     </div>
-                    {activeWaypointDragTooltip.lines.map((line) => (
+                    {activeWaypointTooltip.lines.map((line) => (
                       <div
                         key={`${waypoint.id}-${line.label}`}
-                        className="waypoint-drag-tooltip__row"
+                        className={`waypoint-drag-tooltip__row ${
+                          line.active ? 'is-active-axis' : ''
+                        }`}
                       >
                         <span>{line.label}</span>
                         <strong>{line.value}</strong>
                         <em
                           className={
-                            line.delta.startsWith('-')
-                              ? 'is-negative'
-                              : 'is-positive'
+                            line.delta
+                              ? line.delta.startsWith('-')
+                                ? 'is-negative'
+                                : 'is-positive'
+                              : ''
                           }
                         >
-                          {line.delta}
+                          {line.delta ?? ''}
                         </em>
                       </div>
                     ))}
-                    {activeWaypointDragTooltip.snapActive && (
+                    {activeWaypointTooltip.snapActive && (
                       <div className="waypoint-drag-tooltip__hint">snap 5m</div>
                     )}
-                    {activeWaypointDragTooltip.clampState !== 'none' && (
+                    {activeWaypointTooltip.clampState !== 'none' && (
                       <div className="waypoint-drag-tooltip__hint is-danger">
-                        {activeWaypointDragTooltip.clampState === 'min'
+                        {activeWaypointTooltip.clampState === 'min'
                           ? 'min altitude reached'
                           : 'max altitude reached'}
                       </div>
                     )}
                   </div>
                 </Html>
-              )}
-
-              {shouldShowPersistentLabel && (
-                <Billboard position={[0, isIntermediate ? 7.2 : 8.6, 0]} follow>
-                  <mesh>
-                    <circleGeometry args={[isIntermediate ? 3.25 : 4.2, 36]} />
-                    <meshBasicMaterial
-                      color={waypointSafetyColor}
-                      transparent
-                      opacity={isIntermediate ? 0.78 : 1}
-                    />
-                  </mesh>
-                  <Text
-                    position={[0, 0, 0.05]}
-                    fontSize={isIntermediate ? 2.35 : 3.2}
-                    color="#ffffff"
-                    anchorX="center"
-                    anchorY="middle"
-                  >
-                    {waypoint.id}
-                  </Text>
-                </Billboard>
-              )}
-
-              {(isHovered || isSelected) && batteryEstimate && (
-                <Billboard position={[0, 23, 0]} follow>
-                  <mesh>
-                    <planeGeometry args={[22, 5.2]} />
-                    <meshBasicMaterial color="#0f172a" transparent opacity={0.92} />
-                  </mesh>
-                  <Text
-                    position={[0, 0, 0.05]}
-                    fontSize={1.9}
-                    color="#ffffff"
-                    anchorX="center"
-                    anchorY="middle"
-                  >
-                    {`WP ${waypoint.id} · ~${Math.round(
-                      batteryEstimate.remainingPercent,
-                    )}%`}
-                  </Text>
-                </Billboard>
               )}
 
               {isStartWaypoint && (
@@ -2543,25 +2544,24 @@ function MissionWorld({
                 </Billboard>
               )}
 
-              {actionCount > 0 && (
-                <Billboard
-                  position={[isIntermediate ? 4.3 : 5.5, isIntermediate ? 4.2 : 4.8, 0]}
-                  follow
+              {actionIcons.length > 0 && (
+                <Html
+                  position={[isIntermediate ? 4.3 : 5.4, isIntermediate ? 4.3 : 4.8, 0]}
+                  center
+                  transform={false}
+                  style={{ pointerEvents: 'none' }}
                 >
-                  <mesh>
-                    <planeGeometry args={isIntermediate ? [6.6, 3.8] : [7.6, 4.2]} />
-                    <meshBasicMaterial color="#f97316" transparent opacity={0.98} />
-                  </mesh>
-                  <Text
-                    position={[0, 0, 0.05]}
-                    fontSize={isIntermediate ? 1.95 : 2.2}
-                    color="#ffffff"
-                    anchorX="center"
-                    anchorY="middle"
-                  >
-                    A{actionCount}
-                  </Text>
-                </Billboard>
+                  <div className="waypoint-action-icon-row" aria-hidden="true">
+                    {actionIcons.map((Icon, index) => (
+                      <span
+                        key={`${waypoint.id}-action-icon-${index}`}
+                        className="waypoint-action-icon-chip"
+                      >
+                        <Icon size={isIntermediate ? 11 : 12} strokeWidth={2.2} />
+                      </span>
+                    ))}
+                  </div>
+                </Html>
               )}
             </group>
           )
@@ -3084,22 +3084,6 @@ function AltitudeBeacon({
           <boxGeometry args={[12.4, 0.44, 0.8]} />
           <meshStandardMaterial color="#38465a" />
         </mesh>
-
-        <Billboard position={[0, 10, 0]} follow>
-          <mesh>
-            <planeGeometry args={[18, 7]} />
-            <meshBasicMaterial color={beaconColor} transparent opacity={0.96} />
-          </mesh>
-          <Text
-            position={[0, 0, 0.04]}
-            fontSize={2.8}
-            color="#ffffff"
-            anchorX="center"
-            anchorY="middle"
-          >
-            {anchor.z}m
-          </Text>
-        </Billboard>
       </group>
     </>
   )
@@ -5511,6 +5495,30 @@ function formatSimulationCueLabel(actionType: string): string {
       return 'Pass 2/2'
     default:
       return 'Hover'
+  }
+}
+
+function getWaypointActionViewportIcon(
+  actionType: MissionWaypointActionType,
+): LucideIcon {
+  switch (actionType) {
+    case 'take_photo':
+      return Camera
+    case 'record_video':
+      return Video
+    case 'drop_payload':
+      return Package
+    case 'fire_suppress':
+      return Flame
+    case 'change_altitude':
+      return MoveVertical
+    case 'set_gimbal':
+      return Aperture
+    case 'trigger_sensor':
+      return ScanSearch
+    case 'hover':
+    default:
+      return TimerReset
   }
 }
 
