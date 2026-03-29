@@ -1,6 +1,7 @@
 import {
   Billboard,
   Grid,
+  Html,
   Line,
   OrbitControls,
   PerspectiveCamera,
@@ -69,6 +70,15 @@ import type {
   MissionWaypoint,
 } from '../store/useMissionStore'
 import type { MissionWaypointActionType } from '../lib/waypointActions'
+import {
+  calculateWaypointStemHitboxHeight,
+  calculateWaypointStemHitboxRadius,
+  calculateWaypointZMetersPerPixel,
+  getWaypointDragClampState,
+  WAYPOINT_DRAG_MAX_ALTITUDE,
+  WAYPOINT_DRAG_MIN_ALTITUDE,
+  type WaypointPositionPatch,
+} from '../lib/waypointDrag'
 
 const CAMERA_POSITION: [number, number, number] = [156, 132, 156]
 const WORLD_CENTER = { x: 0, y: 0 }
@@ -153,6 +163,25 @@ interface SimulationCameraProfile {
   fixedTarget?: THREE.Vector3
 }
 
+interface WaypointXYDragState {
+  waypointId: number
+  start: MissionWaypoint
+  altitude: number
+  clientX: number
+  clientY: number
+}
+
+interface WaypointZDragState {
+  waypointId: number
+  start: MissionWaypoint
+  startClientY: number
+  clientX: number
+  clientY: number
+  metersPerPixel: number
+  clampState: 'none' | 'min' | 'max'
+  snapActive: boolean
+}
+
 interface MissionViewport3DProps {
   stage: MissionStage
   scanAltitude: number
@@ -184,6 +213,7 @@ interface MissionViewport3DProps {
   onUpdatePoint: (id: number, x: number, y: number) => void
   onClosePolygon: () => void
   onSelectWaypoint: (id: number | null) => void
+  onUpdateWaypointPosition?: (id: number, patch: WaypointPositionPatch) => void
   onBulkAssignWaypoint?: (id: number) => void
   onExitBulkAssign?: () => void
   onHoveredWaypointChange?: (id: number | null) => void
@@ -227,6 +257,7 @@ export function MissionViewport3D({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onUpdateWaypointPosition,
   onBulkAssignWaypoint,
   onExitBulkAssign,
   onHoveredWaypointChange,
@@ -239,9 +270,11 @@ export function MissionViewport3D({
   onCameraDebugChange,
 }: MissionViewport3DProps) {
   const [draggingPointId, setDraggingPointId] = useState<number | null>(null)
+  const [isWaypointDragActive, setIsWaypointDragActive] = useState(false)
   const [isGeneratedRevealActive, setIsGeneratedRevealActive] = useState(false)
   const [isPatternTransitionActive, setIsPatternTransitionActive] = useState(false)
   const [isRouteRevealActive, setIsRouteRevealActive] = useState(false)
+  const [viewportCursor, setViewportCursor] = useState('')
   const previousSkipTokenRef = useRef(skipAnimationToken)
   const animationStateRef = useRef<ViewportAnimationState>('settled')
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -300,8 +333,46 @@ export function MissionViewport3D({
     publishAnimationState('settled')
   }, [isAnimationLocked, publishAnimationState])
 
+  const handleCanvasPointerMissed = useCallback(
+    (event: MouseEvent) => {
+      if (stage !== 'generated' || selectedWaypointId === null) {
+        return
+      }
+
+      if (isAnimationLocked || isWaypointDragActive) {
+        return
+      }
+
+      if (waypointContextMenuVisible || bulkAssignActionType) {
+        return
+      }
+
+      if (event.button !== 0) {
+        return
+      }
+
+      onHoveredWaypointChange?.(null)
+      onSelectWaypoint(null)
+    },
+    [
+      bulkAssignActionType,
+      isAnimationLocked,
+      isWaypointDragActive,
+      onHoveredWaypointChange,
+      onSelectWaypoint,
+      selectedWaypointId,
+      stage,
+      waypointContextMenuVisible,
+    ],
+  )
+
   return (
-    <Canvas className="viewport-canvas" gl={{ antialias: true }}>
+    <Canvas
+      className="viewport-canvas"
+      gl={{ antialias: true }}
+      onPointerMissed={handleCanvasPointerMissed}
+      style={{ cursor: viewportCursor || undefined }}
+    >
       <color attach="background" args={['#d6e0ec']} />
       <fog attach="fog" args={['#d6e0ec', 210, 420]} />
       <PerspectiveCamera
@@ -342,10 +413,11 @@ export function MissionViewport3D({
           onStartDrawing={onStartDrawing}
           draggingPointId={draggingPointId}
           onAddPoint={onAddPoint}
-          onUpdatePoint={onUpdatePoint}
-          onClosePolygon={onClosePolygon}
-          onSelectWaypoint={onSelectWaypoint}
-          onBulkAssignWaypoint={onBulkAssignWaypoint}
+        onUpdatePoint={onUpdatePoint}
+        onClosePolygon={onClosePolygon}
+        onSelectWaypoint={onSelectWaypoint}
+        onUpdateWaypointPosition={onUpdateWaypointPosition}
+        onBulkAssignWaypoint={onBulkAssignWaypoint}
           onExitBulkAssign={onExitBulkAssign}
           onHoveredWaypointChange={onHoveredWaypointChange}
           onWaypointContextMenu={onWaypointContextMenu}
@@ -355,6 +427,8 @@ export function MissionViewport3D({
           onDraggingPointChange={setDraggingPointId}
           onPatternTransitionActiveChange={setIsPatternTransitionActive}
           onRouteRevealActiveChange={setIsRouteRevealActive}
+          onWaypointDragActiveChange={setIsWaypointDragActive}
+          onCursorChange={setViewportCursor}
           onSimulationTelemetryChange={onSimulationTelemetryChange}
           orbitControlsRef={orbitControlsRef}
           lastOrbitInteractionAtRef={lastOrbitInteractionAtRef}
@@ -492,6 +566,8 @@ interface MissionWorldProps extends MissionViewport3DProps {
   onDraggingPointChange: (id: number | null) => void
   onPatternTransitionActiveChange: (active: boolean) => void
   onRouteRevealActiveChange: (active: boolean) => void
+  onWaypointDragActiveChange?: (active: boolean) => void
+  onCursorChange?: (cursor: string) => void
   orbitControlsRef: React.RefObject<OrbitControlsHandle | null>
   lastOrbitInteractionAtRef: React.RefObject<number>
 }
@@ -529,6 +605,7 @@ function MissionWorld({
   onUpdatePoint,
   onClosePolygon,
   onSelectWaypoint,
+  onUpdateWaypointPosition,
   onBulkAssignWaypoint,
   onExitBulkAssign,
   onHoveredWaypointChange,
@@ -539,6 +616,8 @@ function MissionWorld({
   onDraggingPointChange,
   onPatternTransitionActiveChange,
   onRouteRevealActiveChange,
+  onWaypointDragActiveChange,
+  onCursorChange,
   onSimulationTelemetryChange,
   orbitControlsRef,
   lastOrbitInteractionAtRef,
@@ -546,6 +625,14 @@ function MissionWorld({
   const { camera, gl } = useThree()
   const [hoverPoint, setHoverPoint] = useState<Vec2 | null>(null)
   const [isReadyToClose, setIsReadyToClose] = useState(false)
+  const [hoveredWaypointSphereId, setHoveredWaypointSphereId] = useState<number | null>(null)
+  const [hoveredWaypointStemId, setHoveredWaypointStemId] = useState<number | null>(null)
+  const [draggingWaypointXY, setDraggingWaypointXY] = useState<WaypointXYDragState | null>(
+    null,
+  )
+  const [draggingWaypointZ, setDraggingWaypointZ] = useState<WaypointZDragState | null>(
+    null,
+  )
   const [previewTransition, setPreviewTransition] =
     useState<PreviewTransition | null>(null)
   const [routeRevealAnimation, setRouteRevealAnimation] =
@@ -873,6 +960,300 @@ function MissionWorld({
     }
   }, [camera, draggingPointId, gl, onDraggingPointChange, onUpdatePoint, scanAltitude])
 
+  useEffect(() => {
+    if (stage === 'generated') {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setHoveredWaypointSphereId(null)
+      setHoveredWaypointStemId(null)
+      setDraggingWaypointXY(null)
+      setDraggingWaypointZ(null)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [stage])
+
+  useEffect(() => {
+    const isHoveredSelectedSphere =
+      selectedWaypointId !== null && hoveredWaypointSphereId === selectedWaypointId
+    const isHoveredSelectedStem =
+      selectedWaypointId !== null && hoveredWaypointStemId === selectedWaypointId
+    const nextCursor =
+      stage !== 'generated' || inputLocked
+        ? ''
+        : draggingWaypointZ
+          ? 'ns-resize'
+          : draggingWaypointXY
+            ? 'grabbing'
+            : isHoveredSelectedStem
+              ? 'ns-resize'
+              : isHoveredSelectedSphere
+                ? 'grab'
+                : ''
+
+    onCursorChange?.(nextCursor)
+
+    return () => {
+      onCursorChange?.('')
+    }
+  }, [
+    draggingWaypointXY,
+    draggingWaypointZ,
+    selectedWaypointId,
+    hoveredWaypointSphereId,
+    hoveredWaypointStemId,
+    inputLocked,
+    onCursorChange,
+    stage,
+  ])
+
+  useEffect(() => {
+    if (!draggingWaypointXY || !onUpdateWaypointPosition) {
+      return undefined
+    }
+
+    const activeWaypoint = draggingWaypointXY
+    const updateWaypointPosition = onUpdateWaypointPosition
+    const raycaster = new THREE.Raycaster()
+    const altitudePlane = new THREE.Plane(
+      new THREE.Vector3(0, 1, 0),
+      -activeWaypoint.altitude,
+    )
+    const hitPoint = new THREE.Vector3()
+    const controls = orbitControlsRef.current
+    const restoreControls = controls
+      ? {
+          enabled: controls.enabled,
+          enablePan: controls.enablePan,
+          enableRotate: controls.enableRotate,
+          enableZoom: controls.enableZoom,
+        }
+      : null
+    let pendingPatch: WaypointPositionPatch | null = null
+    let pendingCursor: { x: number; y: number } | null = null
+    let frameId: number | null = null
+
+    if (controls) {
+      controls.enabled = false
+      controls.enablePan = false
+      controls.enableRotate = false
+      controls.enableZoom = false
+      controls.update()
+    }
+
+    function flushPendingUpdate() {
+      if (pendingPatch) {
+        updateWaypointPosition(activeWaypoint.waypointId, pendingPatch)
+        pendingPatch = null
+      }
+
+      if (pendingCursor) {
+        const nextCursor = pendingCursor
+        pendingCursor = null
+        setDraggingWaypointXY((current) =>
+          current?.waypointId === activeWaypoint.waypointId
+            ? {
+                ...current,
+                clientX: nextCursor.x,
+                clientY: nextCursor.y,
+              }
+            : current,
+        )
+      }
+    }
+
+    function scheduleUpdateFlush() {
+      if (frameId !== null) {
+        return
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null
+        flushPendingUpdate()
+      })
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const bounds = gl.domElement.getBoundingClientRect()
+
+      const pointer = new THREE.Vector2(
+        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+      )
+
+      raycaster.setFromCamera(pointer, camera)
+
+      if (!raycaster.ray.intersectPlane(altitudePlane, hitPoint)) {
+        return
+      }
+
+      const nextPoint = clampScenePoint(hitPoint)
+      pendingPatch = { x: nextPoint.x, y: nextPoint.y }
+      pendingCursor = {
+        x: event.clientX - bounds.left,
+        y: event.clientY - bounds.top,
+      }
+      scheduleUpdateFlush()
+    }
+
+    function handlePointerUp() {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+        frameId = null
+      }
+
+      flushPendingUpdate()
+      setDraggingWaypointXY(null)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
+
+      if (restoreControls && controls) {
+        controls.enabled = restoreControls.enabled
+        controls.enablePan = restoreControls.enablePan
+        controls.enableRotate = restoreControls.enableRotate
+        controls.enableZoom = restoreControls.enableZoom
+        controls.update()
+      }
+
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [camera, draggingWaypointXY, gl, onUpdateWaypointPosition, orbitControlsRef])
+
+  useEffect(() => {
+    if (!draggingWaypointZ || !onUpdateWaypointPosition) {
+      return undefined
+    }
+
+    const activeWaypoint = draggingWaypointZ
+    const updateWaypointPosition = onUpdateWaypointPosition
+    const controls = orbitControlsRef.current
+    const restoreControls = controls
+      ? {
+          enabled: controls.enabled,
+          enablePan: controls.enablePan,
+          enableRotate: controls.enableRotate,
+          enableZoom: controls.enableZoom,
+        }
+      : null
+    let pendingPatch: WaypointPositionPatch | null = null
+    let pendingDragMeta:
+      | {
+          clientX: number
+          clientY: number
+          clampState: 'none' | 'min' | 'max'
+          snapActive: boolean
+        }
+      | null = null
+    let frameId: number | null = null
+
+    if (controls) {
+      controls.enabled = false
+      controls.enablePan = false
+      controls.enableRotate = false
+      controls.enableZoom = false
+      controls.update()
+    }
+
+    function flushPendingUpdate() {
+      if (pendingPatch) {
+        updateWaypointPosition(activeWaypoint.waypointId, pendingPatch)
+        pendingPatch = null
+      }
+
+      if (pendingDragMeta) {
+        const nextMeta = pendingDragMeta
+        pendingDragMeta = null
+        setDraggingWaypointZ((current) =>
+          current?.waypointId === activeWaypoint.waypointId
+            ? {
+                ...current,
+                clientX: nextMeta.clientX,
+                clientY: nextMeta.clientY,
+                clampState: nextMeta.clampState,
+                snapActive: nextMeta.snapActive,
+              }
+            : current,
+        )
+      }
+    }
+
+    function scheduleUpdateFlush() {
+      if (frameId !== null) {
+        return
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null
+        flushPendingUpdate()
+      })
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const bounds = gl.domElement.getBoundingClientRect()
+      const deltaPixels = activeWaypoint.startClientY - event.clientY
+      const rawAltitude =
+        activeWaypoint.start.z + deltaPixels * activeWaypoint.metersPerPixel
+      const snappedAltitude = event.shiftKey
+        ? Math.round(rawAltitude / 5) * 5
+        : rawAltitude
+      const nextAltitude = Math.min(
+        WAYPOINT_DRAG_MAX_ALTITUDE,
+        Math.max(WAYPOINT_DRAG_MIN_ALTITUDE, snappedAltitude),
+      )
+
+      pendingPatch = { z: nextAltitude }
+      pendingDragMeta = {
+        clientX: event.clientX - bounds.left,
+        clientY: event.clientY - bounds.top,
+        clampState: getWaypointDragClampState(nextAltitude),
+        snapActive: event.shiftKey,
+      }
+      scheduleUpdateFlush()
+    }
+
+    function handlePointerUp() {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+        frameId = null
+      }
+
+      flushPendingUpdate()
+      setDraggingWaypointZ(null)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId)
+      }
+
+      if (restoreControls && controls) {
+        controls.enabled = restoreControls.enabled
+        controls.enablePan = restoreControls.enablePan
+        controls.enableRotate = restoreControls.enableRotate
+        controls.enableZoom = restoreControls.enableZoom
+        controls.update()
+      }
+
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [draggingWaypointZ, gl, onUpdateWaypointPosition, orbitControlsRef])
+
   const canClosePolygon = stage === 'drawing' && drawingPoints.length >= 3
   const isPlaneInteractive = stage === 'setup' || stage === 'drawing'
   const applyHoverState = useCallback((point: Vec2 | null, readyToClose: boolean) => {
@@ -1027,6 +1408,90 @@ function MissionWorld({
     selectedWaypointId === null
       ? null
       : waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null
+  const draggedWaypointXYCurrent =
+    draggingWaypointXY === null
+      ? null
+      : waypoints.find((waypoint) => waypoint.id === draggingWaypointXY.waypointId) ??
+        draggingWaypointXY.start
+  const draggedWaypointZCurrent =
+    draggingWaypointZ === null
+      ? null
+      : waypoints.find((waypoint) => waypoint.id === draggingWaypointZ.waypointId) ??
+        draggingWaypointZ.start
+  const activeWaypointDragTooltip = useMemo(() => {
+    if (draggingWaypointXY && draggedWaypointXYCurrent) {
+      return {
+        mode: 'xy' as const,
+        waypoint: draggedWaypointXYCurrent,
+        screenX: draggingWaypointXY.clientX,
+        screenY: draggingWaypointXY.clientY,
+        lines: [
+          {
+            label: 'X',
+            value: `${formatDragNumber(draggingWaypointXY.start.x)}m -> ${formatDragNumber(
+              draggedWaypointXYCurrent.x,
+            )}m`,
+            delta: formatSignedDistance(
+              draggedWaypointXYCurrent.x - draggingWaypointXY.start.x,
+            ),
+          },
+          {
+            label: 'Y',
+            value: `${formatDragNumber(draggingWaypointXY.start.y)}m -> ${formatDragNumber(
+              draggedWaypointXYCurrent.y,
+            )}m`,
+            delta: formatSignedDistance(
+              draggedWaypointXYCurrent.y - draggingWaypointXY.start.y,
+            ),
+          },
+        ],
+        accent: '#7c6bff',
+        clampState: 'none' as const,
+        snapActive: false,
+      }
+    }
+
+    if (draggingWaypointZ && draggedWaypointZCurrent) {
+      return {
+        mode: 'z' as const,
+        waypoint: draggedWaypointZCurrent,
+        screenX: draggingWaypointZ.clientX,
+        screenY: draggingWaypointZ.clientY,
+        lines: [
+          {
+            label: 'Z',
+            value: `${formatDragNumber(draggingWaypointZ.start.z)}m -> ${formatDragNumber(
+              draggedWaypointZCurrent.z,
+            )}m`,
+            delta: formatSignedDistance(
+              draggedWaypointZCurrent.z - draggingWaypointZ.start.z,
+            ),
+          },
+        ],
+        accent: '#3b82f6',
+        clampState: draggingWaypointZ.clampState,
+        snapActive: draggingWaypointZ.snapActive,
+      }
+    }
+
+    return null
+  }, [
+    draggedWaypointXYCurrent,
+    draggedWaypointZCurrent,
+    draggingWaypointXY,
+    draggingWaypointZ,
+  ])
+  const isWaypointDragActive =
+    draggingWaypointXY !== null || draggingWaypointZ !== null
+
+  useEffect(() => {
+    onWaypointDragActiveChange?.(isWaypointDragActive)
+
+    return () => {
+      onWaypointDragActiveChange?.(false)
+    }
+  }, [isWaypointDragActive, onWaypointDragActiveChange])
+
   const isClosedLoopPattern =
     isClosedLoopMission ?? (getStartWaypointPolicy(selectedPattern) === 'closed-rotatable')
   const startWaypointId = waypoints[0]?.id ?? null
@@ -1035,6 +1500,22 @@ function MissionWorld({
       ? waypoints[waypoints.length - 1]?.id ?? null
       : null
   const pointOfNoReturnId = batteryReport?.pointOfNoReturn ?? null
+  const interactionCameraTarget =
+    drawingTarget === 'exclusion' && drawingPoints.length > 0
+      ? polygonCentroid(drawingPoints)
+      : points.length > 0
+        ? polygonCentroid(points)
+        : waypoints.length > 0
+          ? polygonCentroid(waypoints)
+          : WORLD_CENTER
+  const cameraPolarDeg = getCameraPolarAngleDeg(
+    camera.position,
+    new THREE.Vector3(
+      interactionCameraTarget.x,
+      scanAltitude,
+      interactionCameraTarget.y,
+    ),
+  )
 
   const flightAnchor = useMemo(() => {
     if (selectedWaypoint) {
@@ -1144,6 +1625,81 @@ function MissionWorld({
     event.stopPropagation()
     applyHoverState(null, false)
     onDraggingPointChange(pointId)
+  }
+
+  function handleGeneratedWaypointSpherePointerDown(
+    event: ThreeEvent<PointerEvent>,
+    waypoint: MissionWaypoint,
+  ) {
+    if (
+      stage !== 'generated' ||
+      inputLocked ||
+      bulkAssignActionType ||
+      waypointContextMenuVisible ||
+      draggingWaypointZ ||
+      !onUpdateWaypointPosition ||
+      selectedWaypointId !== waypoint.id
+    ) {
+      return
+    }
+
+    if (event.button !== 0) {
+      return
+    }
+
+    event.stopPropagation()
+    setHoveredWaypointSphereId(waypoint.id)
+    setDraggingWaypointXY({
+      waypointId: waypoint.id,
+      start: waypoint,
+      altitude: waypoint.z,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    })
+  }
+
+  function handleGeneratedWaypointStemPointerDown(
+    event: ThreeEvent<PointerEvent>,
+    waypoint: MissionWaypoint,
+  ) {
+    if (
+      stage !== 'generated' ||
+      inputLocked ||
+      bulkAssignActionType ||
+      waypointContextMenuVisible ||
+      draggingWaypointXY ||
+      !onUpdateWaypointPosition ||
+      selectedWaypointId !== waypoint.id
+    ) {
+      return
+    }
+
+    if (event.button !== 0) {
+      return
+    }
+
+    event.stopPropagation()
+
+    const cameraDistance = camera.position.distanceTo(
+      new THREE.Vector3(...toAltitudeMarkerPosition(waypoint, waypoint.z)),
+    )
+    const polarDeg = getCameraPolarAngleDeg(camera.position, orbitControlsRef.current?.target ?? null)
+
+    setHoveredWaypointStemId(waypoint.id)
+    setDraggingWaypointZ({
+      waypointId: waypoint.id,
+      start: waypoint,
+      startClientY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      metersPerPixel: calculateWaypointZMetersPerPixel(cameraDistance),
+      clampState: 'none',
+      snapActive: event.shiftKey,
+    })
+
+    if (polarDeg < 30) {
+      onHoveredWaypointChange?.(waypoint.id)
+    }
   }
 
   function handleVertexClick(
@@ -1380,28 +1936,127 @@ function MissionWorld({
       )}
 
       {stage === 'generated' &&
-        revealedWaypoints.map((waypoint) => (
-          <Line
-            key={`stem-${waypoint.id}`}
-            points={[
-              toGroundSurfacePosition(waypoint),
-              toAltitudeMarkerPosition(waypoint, waypoint.z),
-            ]}
-            color={
-              getSafetyLevelColor(
-                waypointBatteryEstimateMap.get(waypoint.id)?.safetyLevel ?? 'safe',
-              )
-            }
-            transparent
-            opacity={
-              selectedWaypointId === waypoint.id
-                ? 0.9
-                : waypoint.role === 'intermediate'
-                  ? 0.16
-                  : 0.32
-            }
-          />
-        ))}
+        revealedWaypoints.map((waypoint) => {
+          const isSelected = selectedWaypointId === waypoint.id
+          const isIntermediate = waypoint.role === 'intermediate'
+          const isStemHovered = hoveredWaypointStemId === waypoint.id
+          const isStemDragging = draggingWaypointZ?.waypointId === waypoint.id
+          const isStemEditableHover = isSelected && isStemHovered
+          const safetyColor = getSafetyLevelColor(
+            waypointBatteryEstimateMap.get(waypoint.id)?.safetyLevel ?? 'safe',
+          )
+          const markerPosition = toAltitudeMarkerPosition(waypoint, waypoint.z)
+          const markerVector = new THREE.Vector3(...markerPosition)
+          const cameraDistance = camera.position.distanceTo(markerVector)
+          const stemHitboxRadius = calculateWaypointStemHitboxRadius(
+            cameraDistance,
+            cameraPolarDeg,
+          )
+          const stemHitboxHeight = calculateWaypointStemHitboxHeight(
+            waypoint.z,
+            ALTITUDE_MARKER_LIFT,
+            GROUND_SURFACE_HEIGHT,
+          )
+          const stemBottomOffset =
+            GROUND_SURFACE_HEIGHT - (waypoint.z + ALTITUDE_MARKER_LIFT)
+          const stemMidY = stemBottomOffset / 2
+
+          return (
+            <group key={`stem-${waypoint.id}`} position={markerPosition}>
+              <Line
+                points={[
+                  [0, stemBottomOffset, 0],
+                  [0, 0, 0],
+                ]}
+                color={isStemEditableHover || isStemDragging ? '#3b82f6' : safetyColor}
+                transparent
+                opacity={
+                  isStemDragging
+                    ? 1
+                    : isStemEditableHover
+                      ? 0.92
+                      : isSelected
+                        ? 0.9
+                        : isIntermediate
+                          ? 0.16
+                          : 0.32
+                }
+                lineWidth={isStemEditableHover || isStemDragging ? 2.8 : 1.4}
+              />
+
+              {!inputLocked &&
+                !bulkAssignActionType &&
+                !waypointContextMenuVisible && (
+                  <mesh
+                    position={[0, stemMidY, 0]}
+                    onPointerEnter={(event) => {
+                      event.stopPropagation()
+                      setHoveredWaypointStemId(waypoint.id)
+                    }}
+                    onPointerLeave={(event) => {
+                      event.stopPropagation()
+
+                      if (draggingWaypointZ?.waypointId !== waypoint.id) {
+                        setHoveredWaypointStemId((current) =>
+                          current === waypoint.id ? null : current,
+                        )
+                      }
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation()
+
+                      if (inputLocked || bulkAssignActionType || isWaypointDragActive) {
+                        return
+                      }
+
+                      onSelectWaypoint(waypoint.id)
+                    }}
+                    onPointerDown={(event) =>
+                      handleGeneratedWaypointStemPointerDown(event, waypoint)
+                    }
+                  >
+                    <cylinderGeometry
+                      args={[
+                        stemHitboxRadius,
+                        stemHitboxRadius,
+                        stemHitboxHeight,
+                        10,
+                      ]}
+                    />
+                    <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                  </mesh>
+                )}
+
+              {(isStemEditableHover || isStemDragging) && (
+                <Billboard position={[0, stemMidY + 4.6, 0]} follow>
+                  <mesh>
+                    <planeGeometry args={[12.4, 4.2]} />
+                    <meshBasicMaterial color="#3b82f6" transparent opacity={0.94} />
+                  </mesh>
+                  <Text
+                    position={[0, 0, 0.05]}
+                    fontSize={1.7}
+                    color="#ffffff"
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    {`\u2195 ${formatDragNumber(waypoint.z)}m`}
+                  </Text>
+                </Billboard>
+              )}
+
+              {isStemDragging && (
+                <mesh
+                  rotation-x={-Math.PI / 2}
+                  position={[0, stemBottomOffset + 0.16, 0]}
+                >
+                  <ringGeometry args={[2.4, 3.2, 32]} />
+                  <meshBasicMaterial color="#3b82f6" transparent opacity={0.18} />
+                </mesh>
+              )}
+            </group>
+          )
+        })}
 
       {stage === 'generated' &&
         revealedColoredRouteSegments.map((segment, index) => (
@@ -1581,6 +2236,9 @@ function MissionWorld({
           const isSelected = waypoint.id === selectedWaypointId
           const isHovered = waypoint.id === hoveredWaypointId
           const isIntermediate = waypoint.role === 'intermediate'
+          const isSphereHovered = hoveredWaypointSphereId === waypoint.id
+          const isXYDragging = draggingWaypointXY?.waypointId === waypoint.id
+          const isSphereEditableHover = isSelected && isSphereHovered
           const actionCount = waypoint.actions.length
           const isStartWaypoint = waypoint.id === startWaypointId
           const isEndWaypoint = waypoint.id === endWaypointId
@@ -1627,6 +2285,10 @@ function MissionWorld({
                   return
                 }
 
+                if (isWaypointDragActive) {
+                  return
+                }
+
                 if (bulkAssignActionType) {
                   onBulkAssignWaypoint?.(waypoint.id)
                   return
@@ -1653,7 +2315,7 @@ function MissionWorld({
                   clientY: event.clientY,
                 })
               }}
-            >
+              >
               {isStartWaypoint && (
                 <mesh rotation-x={-Math.PI / 2} position={[0, 0.3, 0]}>
                   <ringGeometry args={[3.2, 3.9, 36]} />
@@ -1698,8 +2360,36 @@ function MissionWorld({
                 </>
               )}
 
-              <mesh>
-                <sphereGeometry args={[outerRadius, 28, 28]} />
+              <mesh
+                onPointerEnter={(event) => {
+                  event.stopPropagation()
+                  setHoveredWaypointSphereId(waypoint.id)
+                }}
+                onPointerLeave={(event) => {
+                  event.stopPropagation()
+
+                  if (draggingWaypointXY?.waypointId !== waypoint.id) {
+                    setHoveredWaypointSphereId((current) =>
+                      current === waypoint.id ? null : current,
+                    )
+                  }
+                }}
+                onPointerDown={(event) =>
+                  handleGeneratedWaypointSpherePointerDown(event, waypoint)
+                }
+              >
+                <sphereGeometry
+                  args={[
+                    outerRadius +
+                      (isSphereEditableHover || isXYDragging
+                        ? isIntermediate
+                          ? 0.18
+                          : 0.25
+                        : 0),
+                    28,
+                    28,
+                  ]}
+                />
                 <meshStandardMaterial
                   color="#ffffff"
                   transparent
@@ -1711,11 +2401,69 @@ function MissionWorld({
                 <meshStandardMaterial
                   color={waypointSafetyColor}
                   emissive={waypointSafetyColor}
-                  emissiveIntensity={isSelected ? 0.32 : isHovered ? 0.3 : 0.22}
+                  emissiveIntensity={
+                    isXYDragging
+                      ? 0.38
+                      : isSelected
+                        ? 0.32
+                        : isHovered || isSphereHovered
+                          ? 0.3
+                          : 0.22
+                  }
                   transparent
                   opacity={isIntermediate ? 0.84 : 1}
                 />
               </mesh>
+
+              {activeWaypointDragTooltip?.waypoint.id === waypoint.id && (
+                <Html position={[0, 12.5, 0]} center style={{ transform: 'translate(18px, -18px)' }}>
+                  <div
+                    className={`waypoint-drag-tooltip ${
+                      activeWaypointDragTooltip.mode === 'z'
+                        ? 'is-altitude'
+                        : 'is-xy'
+                    } ${
+                      activeWaypointDragTooltip.clampState === 'none'
+                        ? ''
+                        : 'is-clamped'
+                    }`}
+                  >
+                    <div className="waypoint-drag-tooltip__title">
+                      {activeWaypointDragTooltip.mode === 'z'
+                        ? `Waypoint ${waypoint.id} · Altitude`
+                        : `Waypoint ${waypoint.id} · Move`}
+                    </div>
+                    {activeWaypointDragTooltip.lines.map((line) => (
+                      <div
+                        key={`${waypoint.id}-${line.label}`}
+                        className="waypoint-drag-tooltip__row"
+                      >
+                        <span>{line.label}</span>
+                        <strong>{line.value}</strong>
+                        <em
+                          className={
+                            line.delta.startsWith('-')
+                              ? 'is-negative'
+                              : 'is-positive'
+                          }
+                        >
+                          {line.delta}
+                        </em>
+                      </div>
+                    ))}
+                    {activeWaypointDragTooltip.snapActive && (
+                      <div className="waypoint-drag-tooltip__hint">snap 5m</div>
+                    )}
+                    {activeWaypointDragTooltip.clampState !== 'none' && (
+                      <div className="waypoint-drag-tooltip__hint is-danger">
+                        {activeWaypointDragTooltip.clampState === 'min'
+                          ? 'min altitude reached'
+                          : 'max altitude reached'}
+                      </div>
+                    )}
+                  </div>
+                </Html>
+              )}
 
               {shouldShowPersistentLabel && (
                 <Billboard position={[0, isIntermediate ? 7.2 : 8.6, 0]} follow>
@@ -4712,6 +5460,35 @@ function toHeadingScenePoint(point: { x: number; y: number; z: number }): SceneP
 
 function distanceBetweenScenePoints(a: ScenePoint, b: ScenePoint): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+}
+
+function formatDragNumber(value: number): string {
+  return value.toFixed(1)
+}
+
+function formatSignedDistance(value: number): string {
+  const prefix = value >= 0 ? '+' : ''
+  return `${prefix}${value.toFixed(1)}m`
+}
+
+function getCameraPolarAngleDeg(
+  cameraPosition: THREE.Vector3,
+  target: THREE.Vector3 | null,
+): number {
+  if (!target) {
+    return 45
+  }
+
+  const offset = cameraPosition.clone().sub(target)
+  const distance = offset.length()
+
+  if (distance === 0) {
+    return 45
+  }
+
+  return THREE.MathUtils.radToDeg(
+    Math.acos(THREE.MathUtils.clamp(offset.y / distance, -1, 1)),
+  )
 }
 
 function formatSimulationCueLabel(actionType: string): string {

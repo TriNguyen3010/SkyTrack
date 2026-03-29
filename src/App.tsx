@@ -238,6 +238,9 @@ function App() {
   const addPoint = useMissionStore((state) => state.addPoint)
   const updatePoint = useMissionStore((state) => state.updatePoint)
   const selectWaypoint = useMissionStore((state) => state.selectWaypoint)
+  const updateWaypointPosition = useMissionStore(
+    (state) => state.updateWaypointPosition,
+  )
   const setStartWaypoint = useMissionStore((state) => state.setStartWaypoint)
   const setHoveredWaypoint = useMissionStore((state) => state.setHoveredWaypoint)
   const setBulkAssignActionType = useMissionStore(
@@ -1788,6 +1791,8 @@ function App() {
       return
     }
 
+    selectWaypoint(waypointId)
+
     setWaypointRadialMenu({
       waypointId,
       anchor: {
@@ -2054,6 +2059,7 @@ function App() {
               onUpdatePoint={handleUpdatePoint}
               onClosePolygon={handleClosePolygon}
               onSelectWaypoint={selectWaypoint}
+              onUpdateWaypointPosition={updateWaypointPosition}
               onBulkAssignWaypoint={handleApplyBulkAssign}
               onExitBulkAssign={() => setBulkAssignActionType(null)}
               onReadyToCloseChange={setIsReadyToClose}

@@ -7,6 +7,7 @@ import type {
 import {
   DEFAULT_WAYPOINT_DENSITY_CONFIG,
 } from '../lib/waypointDensityModels'
+import { buildPathSegmentsFromAnchors } from '../lib/waypointDensity'
 import type {
   FlightPatternId,
   FlightPatternMissionMeta,
@@ -30,6 +31,10 @@ import {
   type MissionWaypointActionType,
   type WaypointActionPatch,
 } from '../lib/waypointActions'
+import {
+  applyWaypointPositionPatch,
+  type WaypointPositionPatch,
+} from '../lib/waypointDrag'
 
 export type OperationMode = 'simulation' | 'deployment'
 export type EditorTab = 'design' | 'code'
@@ -123,6 +128,10 @@ interface MissionState {
   updateExclusionPoint: (zoneId: number, pointId: number, x: number, y: number) => void
   closeExclusionZone: (zoneId: number) => void
   selectWaypoint: (id: number | null) => void
+  updateWaypointPosition: (
+    waypointId: number,
+    patch: WaypointPositionPatch,
+  ) => void
   setStartWaypoint: (id: number | null) => void
   setHoveredWaypoint: (id: number | null) => void
   setBulkAssignActionType: (type: MissionWaypointActionType | null) => void
@@ -194,6 +203,16 @@ function removeExclusionZoneById(
   zoneId: number,
 ): ExclusionZone[] {
   return zones.filter((zone) => zone.id !== zoneId)
+}
+
+function updateWaypointById(
+  waypoints: MissionWaypoint[],
+  waypointId: number,
+  patch: WaypointPositionPatch,
+): MissionWaypoint[] {
+  return waypoints.map((waypoint) =>
+    waypoint.id === waypointId ? applyWaypointPositionPatch(waypoint, patch) : waypoint,
+  )
 }
 
 const initialState = {
@@ -576,6 +595,35 @@ export const useMissionStore = create<MissionState>((set, get) => ({
       }
     }),
   selectWaypoint: (id) => set({ selectedWaypointId: id }),
+  updateWaypointPosition: (waypointId, patch) =>
+    set((state) => {
+      if (state.stage !== 'generated') {
+        return state
+      }
+
+      const nextWaypoints = updateWaypointById(state.waypoints, waypointId, patch)
+
+      if (nextWaypoints === state.waypoints) {
+        return state
+      }
+
+      const nextAnchorWaypoints = updateWaypointById(
+        state.generatedAnchorWaypoints,
+        waypointId,
+        patch,
+      )
+      const didUpdateAnchor = nextAnchorWaypoints.some(
+        (waypoint, index) => waypoint !== state.generatedAnchorWaypoints[index],
+      )
+
+      return {
+        waypoints: nextWaypoints,
+        generatedAnchorWaypoints: nextAnchorWaypoints,
+        generatedPathSegments: didUpdateAnchor
+          ? buildPathSegmentsFromAnchors(nextAnchorWaypoints)
+          : state.generatedPathSegments,
+      }
+    }),
   setStartWaypoint: (id) => set({ startWaypointId: id }),
   setHoveredWaypoint: (id) => set({ hoveredWaypointId: id }),
   setBulkAssignActionType: (type) => set({ bulkAssignActionType: type }),

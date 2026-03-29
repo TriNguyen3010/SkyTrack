@@ -280,6 +280,84 @@
   font-weight: 700;
 }
 
+.waypoint-drag-tooltip {
+  min-width: 228px;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.86);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.24);
+  padding: 10px 12px;
+  color: #f8fafc;
+  font-family:
+    ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas,
+    Liberation Mono, Courier New, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.waypoint-drag-tooltip.is-altitude {
+  border-color: rgba(59, 130, 246, 0.32);
+}
+
+.waypoint-drag-tooltip.is-xy {
+  border-color: rgba(124, 107, 255, 0.28);
+}
+
+.waypoint-drag-tooltip.is-clamped {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.waypoint-drag-tooltip__title {
+  margin-bottom: 8px;
+  color: #d8b4fe;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.waypoint-drag-tooltip__row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.waypoint-drag-tooltip__row span {
+  color: rgba(226, 232, 240, 0.76);
+}
+
+.waypoint-drag-tooltip__row strong {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.waypoint-drag-tooltip__row em {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.waypoint-drag-tooltip__row em.is-positive {
+  color: #22c55e;
+}
+
+.waypoint-drag-tooltip__row em.is-negative {
+  color: #ef4444;
+}
+
+.waypoint-drag-tooltip__hint {
+  margin-top: 8px;
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.waypoint-drag-tooltip__hint.is-danger {
+  color: #fca5a5;
+}
+
 .simulation-playback-bar {
   position: absolute;
   left: 50%;

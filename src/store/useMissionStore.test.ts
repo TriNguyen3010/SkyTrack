@@ -201,4 +201,50 @@ describe('useMissionStore exclusion zone foundation', () => {
     expect(state.generatedWaypointDensity).toBeNull()
     expect(state.waypoints).toEqual([])
   })
+
+  it('updates generated waypoint position while preserving selection and actions', () => {
+    createBoundary()
+
+    const mission = createGeneratedMission()
+    mission.waypoints[0] = {
+      ...mission.waypoints[0],
+      actions: [{ id: 1, type: 'hover', config: { durationSec: 4 } }],
+    }
+    mission.anchorWaypoints[0] = {
+      ...mission.anchorWaypoints[0],
+      actions: [{ id: 1, type: 'hover', config: { durationSec: 4 } }],
+    }
+
+    const store = useMissionStore.getState()
+    store.generatePath(mission, {
+      mode: 'auto',
+      targetCount: null,
+      targetSpacing: null,
+    })
+    store.selectWaypoint(1)
+    store.setStartWaypoint(1)
+    store.updateWaypointPosition(1, { x: 500, y: -200, z: 999 })
+
+    const state = useMissionStore.getState()
+
+    expect(state.selectedWaypointId).toBe(1)
+    expect(state.startWaypointId).toBe(1)
+    expect(state.waypoints[0]).toMatchObject({
+      id: 1,
+      x: 120,
+      y: -90,
+      z: 200,
+      actions: [{ id: 1, type: 'hover', config: { durationSec: 4 } }],
+    })
+    expect(state.generatedAnchorWaypoints[0]).toMatchObject({
+      id: 1,
+      x: 120,
+      y: -90,
+      z: 200,
+    })
+    expect(state.generatedPathSegments[0]).toMatchObject({
+      fromAnchorId: 1,
+      toAnchorId: 2,
+    })
+  })
 })
