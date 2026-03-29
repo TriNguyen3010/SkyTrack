@@ -272,9 +272,7 @@ function App() {
     )
   const [hoveredPattern, setHoveredPattern] = useState<FlightPatternId | null>(null)
   const [patternPickerVisible, setPatternPickerVisible] = useState(false)
-  const [patternPickerAnchor, setPatternPickerAnchor] = useState<OverlayAnchor | null>(
-    null,
-  )
+  const [, setPatternPickerAnchor] = useState<OverlayAnchor | null>(null)
   const [patternPickerManualPosition, setPatternPickerManualPosition] =
     useState<OverlayAnchor | null>(null)
   const [patternPickerSize, setPatternPickerSize] = useState<OverlayPanelSize>({
@@ -311,6 +309,7 @@ function App() {
   const waypointRowRefs = useRef(new Map<number, HTMLDivElement | null>())
   const viewportStageRef = useRef<HTMLDivElement | null>(null)
   const patternPickerDelayRef = useRef<number | null>(null)
+  const patternHoverTransitionFrameRef = useRef<number | null>(null)
   const patternPickerDragRef = useRef<{
     pointerId: number
     offsetX: number
@@ -716,12 +715,20 @@ function App() {
     ],
   )
 
-  function dismissPatternPicker() {
+  const clearPatternHoverTransition = useCallback(() => {
+    if (patternHoverTransitionFrameRef.current !== null) {
+      window.cancelAnimationFrame(patternHoverTransitionFrameRef.current)
+      patternHoverTransitionFrameRef.current = null
+    }
+  }, [])
+
+  const dismissPatternPicker = useCallback(() => {
     if (patternPickerDelayRef.current !== null) {
       window.clearTimeout(patternPickerDelayRef.current)
       patternPickerDelayRef.current = null
     }
 
+    clearPatternHoverTransition()
     patternPickerDragCleanupRef.current?.()
     patternPickerDragCleanupRef.current = null
     patternPickerDragRef.current = null
@@ -731,7 +738,7 @@ function App() {
     setSimulationSession((current) =>
       current?.source === 'preview' ? null : current,
     )
-  }
+  }, [clearPatternHoverTransition])
 
   function dismissWaypointRadialMenu() {
     setWaypointRadialMenu(null)
@@ -821,6 +828,39 @@ function App() {
     }
   }
 
+  function handleReviewPattern(patternId: FlightPatternId) {
+    if (!patternPickerVisible) {
+      return
+    }
+
+    clearPatternHoverTransition()
+
+    const isActivePreviewLoop =
+      simulationSession?.source === 'preview' && simulationSession.mode === 'loop'
+    const isSwitchingPreviewPattern =
+      isActivePreviewLoop && simulationSession.patternId !== patternId
+
+    if (hoveredPattern === patternId && !isSwitchingPreviewPattern) {
+      return
+    }
+
+    if (isSwitchingPreviewPattern) {
+      setHoveredPattern(null)
+      setSimulationSession((current) =>
+        current?.source === 'preview' && current.mode === 'loop' ? null : current,
+      )
+      setSimulationTelemetry(DEFAULT_DRONE_SIMULATION_TELEMETRY)
+
+      patternHoverTransitionFrameRef.current = window.requestAnimationFrame(() => {
+        patternHoverTransitionFrameRef.current = null
+        setHoveredPattern(patternId)
+      })
+      return
+    }
+
+    setHoveredPattern(patternId)
+  }
+
   function schedulePatternPickerOpen() {
     if (patternPickerDelayRef.current !== null) {
       window.clearTimeout(patternPickerDelayRef.current)
@@ -876,7 +916,7 @@ function App() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [patternPickerVisible])
+  }, [dismissPatternPicker, patternPickerVisible])
 
   useEffect(() => {
     if (!patternPickerVisible || !patternPickerRef.current) {
@@ -910,6 +950,7 @@ function App() {
     }
 
     const frameId = window.requestAnimationFrame(() => {
+      clearPatternHoverTransition()
       if (patternPickerDelayRef.current !== null) {
         window.clearTimeout(patternPickerDelayRef.current)
         patternPickerDelayRef.current = null
@@ -925,7 +966,7 @@ function App() {
     return () => {
       window.cancelAnimationFrame(frameId)
     }
-  }, [patternPickerVisible, stage])
+  }, [clearPatternHoverTransition, patternPickerVisible, stage])
 
   useEffect(() => {
     if (stage === 'idle' || stage === 'setup' || stage === 'drawing') {
@@ -941,6 +982,10 @@ function App() {
 
     return undefined
   }, [stage])
+
+  useEffect(() => () => {
+    clearPatternHoverTransition()
+  }, [clearPatternHoverTransition])
 
   useEffect(() => {
     if (!simulationSession) {
@@ -1685,11 +1730,16 @@ function App() {
 
   function handleSelectPattern(patternId: FlightPatternId) {
     const nextPattern = getFlightPatternOption(patternId)
+    clearPatternHoverTransition()
     setSelectedPattern(patternId)
-    setHoveredPattern(patternId)
+    dismissPatternPicker()
+
     if (nextPattern.implemented) {
-      startPreviewSimulationSession(patternId, 'one-shot')
+      window.requestAnimationFrame(() => {
+        startPreviewSimulationSession(patternId, 'one-shot')
+      })
     }
+
     setInteractionNotice(
       nextPattern.implemented
         ? null
@@ -1919,10 +1969,7 @@ function App() {
           : stage === 'generated'
             ? 'Generated path ready · select waypoint to inspect'
             : null
-  const patternPickerAutoPosition = getPatternPickerPosition(
-    patternPickerAnchor,
-    viewportStageSize,
-  )
+  const patternPickerAutoPosition = getDefaultPatternPickerPosition(viewportStageSize)
   const patternPickerPosition =
     patternPickerAutoPosition === null
       ? null
@@ -2197,10 +2244,10 @@ function App() {
                         Hide
                       </button>
                     </div>
-                  </div>
+                </div>
                   <span>
-                    Hover a path type to lock its preview, drag the canvas to inspect it,
-                    then click to choose.
+                    Hover to review a flight pattern, drag the canvas to inspect it,
+                    then click to choose and continue.
                   </span>
                 </div>
 
@@ -2212,8 +2259,8 @@ function App() {
                       className={`pattern-tile ${
                         selectedPattern === pattern.id ? 'is-selected' : ''
                       } ${reviewedPatternId === pattern.id ? 'is-previewing' : ''}`}
-                      onMouseEnter={() => setHoveredPattern(pattern.id)}
-                      onFocus={() => setHoveredPattern(pattern.id)}
+                      onMouseEnter={() => handleReviewPattern(pattern.id)}
+                      onFocus={() => handleReviewPattern(pattern.id)}
                       onClick={() => handleSelectPattern(pattern.id)}
                     >
                       <span
@@ -2228,7 +2275,7 @@ function App() {
                       </span>
                       <span className="pattern-tile-meta">
                         {reviewedPatternId === pattern.id && (
-                          <span className="pattern-preview-chip">Previewing</span>
+                          <span className="pattern-preview-chip">Reviewing</span>
                         )}
                         {!pattern.implemented && (
                           <span className="pattern-soon-chip">Preview</span>
@@ -4408,17 +4455,15 @@ function formatPatternGeneratedMeta({
   }
 }
 
-function getPatternPickerPosition(
-  anchor: OverlayAnchor | null,
+function getDefaultPatternPickerPosition(
   containerSize: { width: number; height: number },
 ): { left: number; top: number; width: number; placement: 'above' | 'below' } | null {
-  if (!anchor || containerSize.width === 0 || containerSize.height === 0) {
+  if (containerSize.width === 0 || containerSize.height === 0) {
     return null
   }
 
   const { width, height } = containerSize
   const margin = 16
-  const gap = 18
   const popupWidth = Math.min(320, Math.max(width - margin * 2, 0))
   const popupHeight = Math.min(420, Math.max(height - margin * 2, 0))
 
@@ -4426,21 +4471,14 @@ function getPatternPickerPosition(
     return null
   }
 
-  const availableAbove = anchor.y - gap - margin
-  const availableBelow = height - anchor.y - gap - margin
-  const placement =
-    availableBelow >= popupHeight || availableBelow >= availableAbove
-      ? 'below'
-      : 'above'
-  const unclampedLeft = anchor.x - popupWidth / 2
-  const unclampedTop =
-    placement === 'below' ? anchor.y + gap : anchor.y - popupHeight - gap
+  const preferredTop = margin
+  const preferredLeft = margin
 
   return {
-    left: clampValue(unclampedLeft, margin, width - popupWidth - margin),
-    top: clampValue(unclampedTop, margin, height - popupHeight - margin),
+    left: clampValue(preferredLeft, margin, width - popupWidth - margin),
+    top: clampValue(preferredTop, margin, height - popupHeight - margin),
     width: popupWidth,
-    placement,
+    placement: 'below',
   }
 }
 

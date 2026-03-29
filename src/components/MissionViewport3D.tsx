@@ -53,6 +53,10 @@ import {
   DRONE_SIMULATION_CAMERA_RECOVERY_LERP_SPEED,
   DRONE_SIMULATION_CAMERA_TARGET_LERP_SPEED,
   DRONE_SIMULATION_PREVIEW_CAMERA_FOV,
+  DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_AZIMUTH_AMPLITUDE_DEG,
+  DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_CYCLE_MS,
+  DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_POLAR_AMPLITUDE_DEG,
+  DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_Z_DRIFT,
   DRONE_SIMULATION_PREVIEW_CAMERA_POSITION,
   DRONE_SIMULATION_PREVIEW_CAMERA_TARGET,
   DRONE_SIMULATION_TRAIL_POINT_LIMIT,
@@ -172,6 +176,12 @@ interface SimulationCameraProfile {
   recoveryLerpSpeed: number
   fixedPosition?: THREE.Vector3
   fixedTarget?: THREE.Vector3
+  previewOrbit?: {
+    azimuthAmplitudeDeg: number
+    polarAmplitudeDeg: number
+    cycleDurationMs: number
+    zDrift: number
+  }
 }
 
 interface WaypointXYDragState {
@@ -3150,6 +3160,7 @@ function DroneSimulationLayer({
   const telemetryLastPublishedAtRef = useRef(0)
   const currentPulseWaypointIdRef = useRef<number | null>(null)
   const gridPassPauseAppliedRef = useRef(false)
+  const previewOrbitStartedAtRef = useRef<number | null>(null)
   const simulationCameraProfile = useMemo(
     () =>
       getSimulationCameraProfile(
@@ -3281,6 +3292,7 @@ function DroneSimulationLayer({
       trailPointsRef.current = []
       currentPulseWaypointIdRef.current = null
       gridPassPauseAppliedRef.current = false
+      previewOrbitStartedAtRef.current = null
       const frameId = window.requestAnimationFrame(() => {
         setRenderState(null)
       })
@@ -3304,6 +3316,8 @@ function DroneSimulationLayer({
     activeCueRemainingMsRef.current = 0
     activeCueRef.current = null
     gridPassPauseAppliedRef.current = false
+    previewOrbitStartedAtRef.current =
+      typeof performance !== 'undefined' ? performance.now() : Date.now()
     currentPulseWaypointIdRef.current = simulationPath.waypoints[0]?.id ?? null
     const initialSample = sampleDroneSimulationPath(simulationPath, 0)
     const initialSplit = getDroneSimulationPathSplit(simulationPath, 0)
@@ -3556,23 +3570,39 @@ function DroneSimulationLayer({
       camera instanceof THREE.PerspectiveCamera &&
       now - lastOrbitInteractionAt > DRONE_SIMULATION_FOLLOW_RESUME_DELAY_MS
     ) {
+      const previewOrbitElapsedMs =
+        previewOrbitStartedAtRef.current === null
+          ? 0
+          : now - previewOrbitStartedAtRef.current
       const desiredTarget =
-        simulationCameraProfile.fixedTarget?.clone() ??
-        getSimulationFollowTarget({
-          position: nextScenePoint,
-          heading,
-          profile: simulationCameraProfile,
-          missionCenter: simulationMissionCenter,
-        })
+        simulationCameraProfile.fixedTarget && simulationCameraProfile.previewOrbit
+          ? simulationCameraProfile.fixedTarget.clone()
+          : simulationCameraProfile.fixedTarget?.clone() ??
+            getSimulationFollowTarget({
+              position: nextScenePoint,
+              heading,
+              profile: simulationCameraProfile,
+              missionCenter: simulationMissionCenter,
+            })
       const desiredPosition =
-        simulationCameraProfile.fixedPosition?.clone() ??
-        getSimulationFollowCameraPosition({
-          desiredTarget,
-          heading,
-          currentCameraPosition: camera.position,
-          currentTarget: controls.target,
-          profile: simulationCameraProfile,
-        })
+        simulationCameraProfile.fixedPosition &&
+        simulationCameraProfile.fixedTarget &&
+        simulationCameraProfile.previewOrbit
+          ? getPreviewOrbitCameraPosition({
+              fixedPosition: simulationCameraProfile.fixedPosition,
+              fixedTarget: simulationCameraProfile.fixedTarget,
+              elapsedMs: previewOrbitElapsedMs,
+              patternId: session.patternId,
+              orbit: simulationCameraProfile.previewOrbit,
+            })
+          : simulationCameraProfile.fixedPosition?.clone() ??
+            getSimulationFollowCameraPosition({
+              desiredTarget,
+              heading,
+              currentCameraPosition: camera.position,
+              currentTarget: controls.target,
+              profile: simulationCameraProfile,
+            })
       const offset = camera.position.clone().sub(controls.target)
       const shouldRecoverAggressively = isSimulationCameraOutsideEnvelope(
         offset,
@@ -5522,6 +5552,64 @@ function getWaypointActionViewportIcon(
   }
 }
 
+function getPreviewOrbitCameraPosition({
+  fixedPosition,
+  fixedTarget,
+  elapsedMs,
+  patternId,
+  orbit,
+}: {
+  fixedPosition: THREE.Vector3
+  fixedTarget: THREE.Vector3
+  elapsedMs: number
+  patternId: FlightPatternId
+  orbit: NonNullable<SimulationCameraProfile['previewOrbit']>
+}): THREE.Vector3 {
+  const baseOffset = fixedPosition.clone().sub(fixedTarget)
+  const baseDistance = baseOffset.length()
+
+  if (baseDistance === 0) {
+    return fixedPosition.clone()
+  }
+
+  const basePolar = Math.acos(
+    THREE.MathUtils.clamp(baseOffset.y / baseDistance, -1, 1),
+  )
+  const baseAzimuth = Math.atan2(baseOffset.x, baseOffset.z)
+  const cycleProgress =
+    orbit.cycleDurationMs <= 0
+      ? 0
+      : ((elapsedMs % orbit.cycleDurationMs) / orbit.cycleDurationMs) * Math.PI * 2
+  const patternScale =
+    patternId === 'coverage' || patternId === 'grid' || patternId === 'corridor'
+      ? 0.82
+      : 1
+  const azimuthAmplitude = THREE.MathUtils.degToRad(
+    orbit.azimuthAmplitudeDeg * patternScale,
+  )
+  const polarAmplitude = THREE.MathUtils.degToRad(
+    orbit.polarAmplitudeDeg * patternScale,
+  )
+  const azimuth = baseAzimuth + Math.sin(cycleProgress) * azimuthAmplitude
+  const polar = THREE.MathUtils.clamp(
+    basePolar + Math.sin(cycleProgress * 0.85) * polarAmplitude,
+    THREE.MathUtils.degToRad(60),
+    THREE.MathUtils.degToRad(64),
+  )
+  const planarDistance = Math.sin(polar) * baseDistance
+  const zDrift = Math.sin(cycleProgress * 1.12 + Math.PI / 6) * orbit.zDrift * patternScale
+
+  return fixedTarget
+    .clone()
+    .add(
+      new THREE.Vector3(
+        Math.sin(azimuth) * planarDistance,
+        Math.cos(polar) * baseDistance,
+        Math.cos(azimuth) * planarDistance + zDrift,
+      ),
+    )
+}
+
 function getSimulationCameraProfile(
   totalPathLength: number,
   patternId: FlightPatternId,
@@ -5553,6 +5641,12 @@ function getSimulationCameraProfile(
       recoveryLerpSpeed: DRONE_SIMULATION_CAMERA_RECOVERY_LERP_SPEED,
       fixedPosition,
       fixedTarget,
+      previewOrbit: {
+        azimuthAmplitudeDeg: DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_AZIMUTH_AMPLITUDE_DEG,
+        polarAmplitudeDeg: DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_POLAR_AMPLITUDE_DEG,
+        cycleDurationMs: DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_CYCLE_MS,
+        zDrift: DRONE_SIMULATION_PREVIEW_CAMERA_ORBIT_Z_DRIFT,
+      },
     }
   }
 
