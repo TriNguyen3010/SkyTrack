@@ -147,6 +147,8 @@ const toolbarItems = [
   { id: 'select', label: 'Select', icon: MousePointer2 },
 ] as const
 
+const SHOW_CAMERA_DEBUG = false
+
 interface InteractionNotice {
   tone: 'warning' | 'danger'
   message: string
@@ -769,6 +771,23 @@ function App() {
     )
   }, [clearPatternHoverTransition])
 
+  const hidePatternPicker = useCallback(() => {
+    if (patternPickerDelayRef.current !== null) {
+      window.clearTimeout(patternPickerDelayRef.current)
+      patternPickerDelayRef.current = null
+    }
+
+    clearPatternHoverTransition()
+    patternPickerDragCleanupRef.current?.()
+    patternPickerDragCleanupRef.current = null
+    patternPickerDragRef.current = null
+    setPatternPickerVisible(false)
+    setHoveredPattern(null)
+    setSimulationSession((current) =>
+      current?.source === 'preview' ? null : current,
+    )
+  }, [clearPatternHoverTransition])
+
   function dismissWaypointRadialMenu() {
     setWaypointRadialMenu(null)
   }
@@ -945,7 +964,7 @@ function App() {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        dismissPatternPicker()
+        hidePatternPicker()
       }
     }
 
@@ -954,7 +973,7 @@ function App() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [dismissPatternPicker, patternPickerVisible])
+  }, [hidePatternPicker, patternPickerVisible])
 
   useEffect(() => {
     if (!patternPickerVisible || !patternPickerRef.current) {
@@ -1770,20 +1789,14 @@ function App() {
     const nextPattern = getFlightPatternOption(patternId)
     clearPatternHoverTransition()
     setSelectedPattern(patternId)
-    dismissPatternPicker()
-
-    if (nextPattern.implemented) {
-      window.requestAnimationFrame(() => {
-        startPreviewSimulationSession(patternId, 'one-shot')
-      })
-    }
+    setHoveredPattern(patternId)
 
     setInteractionNotice(
       nextPattern.implemented
         ? null
         : {
             tone: 'warning',
-            message: `${nextPattern.shortLabel} is wired for popup selection and preview, but generator logic is still pending.`,
+            message: `${nextPattern.shortLabel} can be reviewed and selected here, but generator logic is still pending.`,
           },
     )
   }
@@ -2151,7 +2164,9 @@ function App() {
               onPatternPickerAnchorChange={setPatternPickerAnchor}
               onAnimationStateChange={setViewportAnimationState}
               onSimulationTelemetryChange={setSimulationTelemetry}
-              onCameraDebugChange={setCameraDebugSnapshot}
+              onCameraDebugChange={
+                SHOW_CAMERA_DEBUG ? setCameraDebugSnapshot : undefined
+              }
               onHoveredWaypointChange={setHoveredWaypoint}
               onWaypointContextMenu={handleWaypointContextMenu}
               onSelectExclusionZone={setActiveExclusionZone}
@@ -2168,7 +2183,7 @@ function App() {
               </button>
             )}
 
-            {cameraDebugSnapshot && (
+            {SHOW_CAMERA_DEBUG && cameraDebugSnapshot && (
               <div className="camera-debug-panel" aria-live="off">
                 <div className="camera-debug-panel__title">Camera Debug</div>
                 <div className="camera-debug-panel__row">
@@ -2277,7 +2292,7 @@ function App() {
                       <button
                         type="button"
                         className="pattern-picker-hide"
-                        onClick={dismissPatternPicker}
+                        onClick={hidePatternPicker}
                       >
                         Hide
                       </button>
@@ -2285,7 +2300,7 @@ function App() {
                 </div>
                   <span>
                     Hover to review a flight pattern, drag the canvas to inspect it,
-                    then click to choose and continue.
+                    click to select it, then generate when you're ready.
                   </span>
                 </div>
 
@@ -2327,7 +2342,7 @@ function App() {
                 <button
                   type="button"
                   className="pattern-picker-footer"
-                  onClick={dismissPatternPicker}
+                  onClick={hidePatternPicker}
                 >
                   Hide picker
                   <ChevronRight size={14} strokeWidth={2.2} />
