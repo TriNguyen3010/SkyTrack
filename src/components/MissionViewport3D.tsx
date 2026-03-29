@@ -2001,6 +2001,7 @@ function MissionWorld({
           waypoints={[]}
           altitude={scanAltitude}
           mode="preview"
+          hideHelperConnectors={simulationSession !== null}
         />
       )}
 
@@ -2174,6 +2175,7 @@ function MissionWorld({
           waypoints={revealedWaypoints}
           altitude={scanAltitude}
           mode="generated"
+          hideHelperConnectors={simulationSession !== null}
         />
       )}
 
@@ -3897,6 +3899,7 @@ function PatternVisualPolish({
   waypoints,
   altitude,
   mode,
+  hideHelperConnectors = false,
 }: {
   pattern: FlightPatternId
   color: string
@@ -3905,6 +3908,7 @@ function PatternVisualPolish({
   waypoints: MissionWaypoint[]
   altitude: number
   mode: 'preview' | 'generated'
+  hideHelperConnectors?: boolean
 }) {
   if (segments.length === 0 && waypoints.length === 0) {
     return null
@@ -3919,6 +3923,7 @@ function PatternVisualPolish({
           segments={segments}
           altitude={altitude}
           mode={mode}
+          hideConnectorSegments={hideHelperConnectors}
         />
       )
     case 'perimeter':
@@ -3975,12 +3980,14 @@ function CoveragePatternPolish({
   segments,
   altitude,
   mode,
+  hideConnectorSegments = false,
 }: {
   color: string
   points: MissionPoint[]
   segments: Array<[Vec2, Vec2]>
   altitude: number
   mode: 'preview' | 'generated'
+  hideConnectorSegments?: boolean
 }) {
   const ribbonRef = useRef<THREE.Group>(null)
   const { sweepSegments, connectorSegments, directionAngle, bounds } = useMemo(
@@ -4037,19 +4044,20 @@ function CoveragePatternPolish({
         />
       ))}
 
-      {connectorSegments.map(([start, end], index) => (
-        <Line
-          key={`coverage-connector-${index}`}
-          points={[
-            toAltitudePlanePosition(start, altitude, PATTERN_OVERLAY_OFFSET + 0.02),
-            toAltitudePlanePosition(end, altitude, PATTERN_OVERLAY_OFFSET + 0.02),
-          ]}
-          color={color}
-          transparent
-          opacity={0.9}
-          lineWidth={3.8}
-        />
-      ))}
+      {!hideConnectorSegments &&
+        connectorSegments.map(([start, end], index) => (
+          <Line
+            key={`coverage-connector-${index}`}
+            points={[
+              toAltitudePlanePosition(start, altitude, PATTERN_OVERLAY_OFFSET + 0.02),
+              toAltitudePlanePosition(end, altitude, PATTERN_OVERLAY_OFFSET + 0.02),
+            ]}
+            color={color}
+            transparent
+            opacity={0.9}
+            lineWidth={3.8}
+          />
+        ))}
     </>
   )
 }

@@ -76,9 +76,31 @@ describe('waypointInteraction', () => {
       isClosedLoopOverride: false,
     })
 
-    expect(model.effectiveStartWaypointId).toBeNull()
+    expect(model.effectiveStartWaypointId).toBe(1)
     expect(model.didFallbackToAutoStart).toBe(true)
     expect(model.orderedWaypoints.map((entry) => entry.id)).toEqual([1, 2, 3])
+  })
+
+  it('auto-resolves a start waypoint when none is requested', () => {
+    const waypoints = [waypoint(1), waypoint(2), waypoint(3), waypoint(4)]
+
+    const openModel = deriveWaypointInteractionModel({
+      patternId: 'coverage',
+      waypoints,
+      requestedStartWaypointId: null,
+      isClosedLoopOverride: false,
+    })
+    const closedModel = deriveWaypointInteractionModel({
+      patternId: 'perimeter',
+      waypoints,
+      requestedStartWaypointId: null,
+      isClosedLoopOverride: true,
+    })
+
+    expect(openModel.effectiveStartWaypointId).toBe(1)
+    expect(openModel.orderedWaypoints.map((entry) => entry.id)).toEqual([1, 2, 3, 4])
+    expect(closedModel.effectiveStartWaypointId).toBe(1)
+    expect(closedModel.orderedWaypoints.map((entry) => entry.id)).toEqual([1, 2, 3, 4])
   })
 
   it('warns about intermediate actions, duplicate configs, payload drop, and unsafe altitude', () => {

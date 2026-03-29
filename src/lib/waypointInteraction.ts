@@ -64,9 +64,10 @@ export function deriveWaypointInteractionModel({
   const canUseRequestedStart =
     requestedStartWaypointId !== null &&
     allowedStartWaypointIds.includes(requestedStartWaypointId)
+  const autoStartWaypointId = allowedStartWaypointIds[0] ?? null
   const effectiveStartWaypointId = canUseRequestedStart
     ? requestedStartWaypointId
-    : null
+    : autoStartWaypointId
   const orderedWaypoints = getOrderedMissionWaypoints(
     patternId,
     waypoints,

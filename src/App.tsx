@@ -116,6 +116,7 @@ import {
 } from './lib/exclusionValidation'
 import type {
   DroneProfile,
+  Vec3,
   WaypointBatteryEstimate,
 } from './lib/batteryModels'
 import {
@@ -409,6 +410,22 @@ function App() {
         : null,
     [patternGenerationContext, selectedPattern, shouldBuildSelectedPatternMission],
   )
+  const selectedPatternInteractionModel = useMemo(
+    () =>
+      selectedPatternMission
+        ? deriveWaypointInteractionModel({
+            patternId: selectedPattern,
+            waypoints: selectedPatternMission.waypoints,
+            requestedStartWaypointId: null,
+            isClosedLoopOverride: selectedPatternMission.closed,
+          })
+        : null,
+    [selectedPattern, selectedPatternMission],
+  )
+  const orderedSelectedPatternWaypoints = useMemo(
+    () => selectedPatternInteractionModel?.orderedWaypoints ?? [],
+    [selectedPatternInteractionModel],
+  )
   const displayPatternId =
     stage === 'generated' ? generatedPatternId ?? selectedPattern : selectedPattern
   const displayPatternMeta =
@@ -439,21 +456,29 @@ function App() {
     () => selectedPatternMission?.waypoints ?? [],
     [selectedPatternMission],
   )
+  const previewLaunchPoint = useMemo(
+    () => resolveMissionLaunchPoint(orderedSelectedPatternWaypoints, homePoint),
+    [homePoint, orderedSelectedPatternWaypoints],
+  )
   const previewBatteryReport = useMemo(
     () =>
-      stage === 'editing' && selectedPatternMission
+      stage === 'editing' &&
+      orderedSelectedPatternWaypoints.length > 0 &&
+      previewLaunchPoint
         ? computeBatteryReport({
             droneProfile: resolvedDroneProfile,
-            waypoints: selectedPatternMission.waypoints,
-            homePoint,
-            isClosedLoop: selectedPatternMission.closed,
+            waypoints: orderedSelectedPatternWaypoints,
+            homePoint: previewLaunchPoint,
+            isClosedLoop: selectedPatternInteractionModel?.isClosedLoop ?? selectedPatternMission?.closed ?? false,
             safetyPreset: resolvedSafetyPreset,
           })
         : null,
     [
-      homePoint,
+      previewLaunchPoint,
+      orderedSelectedPatternWaypoints,
       resolvedDroneProfile,
       resolvedSafetyPreset,
+      selectedPatternInteractionModel?.isClosedLoop,
       selectedPatternMission,
       stage,
     ],
@@ -497,19 +522,23 @@ function App() {
     () => waypoints.find((waypoint) => waypoint.id === selectedWaypointId) ?? null,
     [selectedWaypointId, waypoints],
   )
+  const generatedLaunchPoint = useMemo(
+    () => resolveMissionLaunchPoint(orderedWaypoints, homePoint),
+    [homePoint, orderedWaypoints],
+  )
   const generatedBatteryReport = useMemo(
     () =>
-      orderedWaypoints.length > 0
+      orderedWaypoints.length > 0 && generatedLaunchPoint
         ? computeBatteryReport({
             droneProfile: resolvedDroneProfile,
             waypoints: orderedWaypoints,
-            homePoint,
+            homePoint: generatedLaunchPoint,
             isClosedLoop: isClosedMissionLoop,
             safetyPreset: resolvedSafetyPreset,
           })
         : null,
     [
-      homePoint,
+      generatedLaunchPoint,
       isClosedMissionLoop,
       orderedWaypoints,
       resolvedDroneProfile,
@@ -783,8 +812,17 @@ function App() {
     mode: DroneSimulationSession['mode'],
   ) {
     const mission = buildFlightPatternMission(patternId, patternGenerationContext)
+    const previewInteractionModel = mission
+      ? deriveWaypointInteractionModel({
+          patternId,
+          waypoints: mission.waypoints,
+          requestedStartWaypointId: null,
+          isClosedLoopOverride: mission.closed,
+        })
+      : null
+    const previewWaypoints = previewInteractionModel?.orderedWaypoints ?? mission?.waypoints ?? []
 
-    if (!mission || mission.waypoints.length < 2) {
+    if (!mission || previewWaypoints.length < 2) {
       return
     }
 
@@ -794,8 +832,8 @@ function App() {
         source: 'preview',
         mode,
         patternId,
-        waypoints: mission.waypoints,
-        isClosedLoop: mission.closed,
+        waypoints: previewWaypoints,
+        isClosedLoop: previewInteractionModel?.isClosedLoop ?? mission.closed,
       }),
     )
   }
@@ -3013,6 +3051,7 @@ function App() {
                   {orderedWaypoints.length > 0 && (
                     <div className="generated-route-order-note">
                       Start WP {displayStartWaypointId ?? orderedWaypoints[0].id} ·{' '}
+                      Launch = route start ·{' '}
                       {isClosedMissionLoop
                         ? 'Closed loop'
                         : `End WP ${missionEndWaypointId ?? '—'}`}
@@ -3747,7 +3786,7 @@ function WaypointActionEditor({
           {batteryEstimate && (
             <div className="action-energy-footnote">
               Remaining after WP {waypoint.id}: ~{Math.round(batteryEstimate.remainingPercent)}%
-              {' '}· RTH cost from here: {Math.round(batteryEstimate.rthCostFromHereMah)} mAh
+              {' '}· Return cost from here: {Math.round(batteryEstimate.rthCostFromHereMah)} mAh
             </div>
           )}
         </div>
@@ -4606,6 +4645,23 @@ function getBlockedStartWaypointMessage(isClosedLoop: boolean): string {
   return isClosedLoop
     ? 'This loop can rotate from any waypoint after generation.'
     : 'Only the first or last waypoint can become the mission start for this path.'
+}
+
+function resolveMissionLaunchPoint(
+  waypoints: MissionWaypoint[],
+  fallbackGroundPoint: Vec3,
+): Vec3 | null {
+  if (waypoints.length === 0) {
+    return null
+  }
+
+  const startWaypoint = waypoints[0]
+
+  return {
+    x: startWaypoint.x,
+    y: startWaypoint.y,
+    z: fallbackGroundPoint.z,
+  }
 }
 
 function clampValue(value: number, min: number, max: number): number {

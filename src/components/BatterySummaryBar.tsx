@@ -71,7 +71,7 @@ export function BatterySummaryBar({
             </span>
           </div>
           <div className="battery-breakdown-row">
-            <span>RTH reserve</span>
+            <span>Return reserve</span>
             <span>{Math.round(report.rthReserveMah)} mAh</span>
           </div>
           <div className="battery-breakdown-row">
@@ -87,7 +87,7 @@ export function BatterySummaryBar({
 
           {report.pointOfNoReturn !== null && (
             <div className="battery-inline-warning">
-              After WP #{report.pointOfNoReturn}, return-home margin becomes tight.
+              After WP #{report.pointOfNoReturn}, return margin becomes tight.
             </div>
           )}
 
